@@ -5,8 +5,10 @@ Formerly Meridian Protocol.
 Network: Base Mainnet
 Contract: `0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D`
 Explorer: https://basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
-Fee: 0.5% on release
+Fee: 0% on release
 Dead wallet: `0x000000000000000000000000000000000000dEaD`
+
+Note: zero fee applies to this source (`FEE_BPS = 0`) and any redeploy from it. Existing on-chain deployments cannot be mutated.
 
 ## Mental Model
 
@@ -93,7 +95,7 @@ Only the fixed seller can call after release. Supports partial withdrawal per ta
 function withdrawFees(uint256 tableId, address token, uint256 amount) external
 ```
 
-Only the release-time fee wallet can call after release. Supports partial fee withdrawal per table and asset.
+Only the release-time fee wallet can call after release. With the zero-fee source (`FEE_BPS = 0`), no normal fee balance accrues; this function remains for ABI compatibility.
 
 ### getTable
 
@@ -140,7 +142,7 @@ Reads per-table/per-asset accounting.
 function quoteFee(uint256 amount) public pure returns (uint256 feeAmount, uint256 sellerAmount)
 ```
 
-Returns 0.5% fee and seller net amount.
+Returns `0` fee and seller amount equal to the full input amount.
 
 ## Example Flow
 

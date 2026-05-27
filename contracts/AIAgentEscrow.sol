@@ -9,7 +9,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 contract AIAgentEscrow is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    uint16 public constant FEE_BPS = 50;
+    uint16 public constant FEE_BPS = 0;
     uint16 public constant BPS_DENOMINATOR = 10_000;
     address public constant NATIVE_TOKEN = address(0);
 

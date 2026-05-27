@@ -8,13 +8,15 @@ The protocol uses a deliberately hard settlement rule:
 
 - Create: a table fixes one seller wallet and one buyer/controller wallet.
 - Fund: only the fixed buyer can fund the table, with any amount, after creation.
-- Release: if the buyer accepts the result, funds become withdrawable by the seller, minus the 0.5% protocol fee.
+- Release: if the buyer accepts the result, funds become withdrawable by the seller with an absolute `0%` protocol fee.
 - Burn: if the buyer rejects/disputes, the funded value is sent to the dead wallet.
 - No timeout: `claimTimeout` intentionally reverts. A silent buyer does not auto-release funds to the seller.
 
 This is a base protocol, not a consumer arbitration product. It does not verify proof, judge work, refund buyers, or resolve disputes. It only enforces the release-or-burn table rules committed on-chain.
 
 ## Mainnet Deployment
+
+Zero-fee source status: this repository now compiles with `FEE_BPS = 0`. Existing on-chain deployments cannot be mutated; redeploy from this source before advertising a live Base address as absolute-zero-fee.
 
 Network: Base Mainnet
 
@@ -42,7 +44,7 @@ Fee wallet:
 0x9f87Eae58dDB89281FDF794CD3Bd13D3e2457a99
 ```
 
-Platform fee: `0.5%` on `release`. `claimTimeout` is disabled and intentionally reverts.
+Platform fee: `0%` on `release`. `claimTimeout` is disabled and intentionally reverts.
 
 ## Testnet Deployment
 
@@ -57,18 +59,18 @@ https://sepolia.basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
 - `createTable(seller, buyer)` / `createEscrow(seller, buyer)` creates an empty table with fixed seller and buyer/controller.
 - `fund(tableId)` is payable native ETH funding and can only be called by the fixed buyer.
 - `fundToken(tableId, token, amount)` funds ERC20 assets after token approval; do not direct-transfer ERC20 tokens to the contract as normal wallet payments.
-- `release(tableId)` snapshots seller/fee withdrawable balances.
+- `release(tableId)` snapshots seller withdrawable balances and records zero protocol fee.
 - `burn(tableId)` / `dispute(tableId)` burns the table funds to `0x000000000000000000000000000000000000dEaD`.
 - `claimTimeout(tableId)` intentionally reverts; timeout release is disabled.
 - `withdraw(tableId, token, amount)` lets the seller withdraw released funds per table/asset.
-- `withdrawFees(tableId, token, amount)` lets the release-time fee wallet withdraw protocol fees per table/asset.
+- `withdrawFees(tableId, token, amount)` remains in the ABI for compatibility, but the protocol fee is zero so no fee balance accrues.
 
 Settlement uses per-table pull-payment accounting:
 
 - released seller amount is tracked on the table as `sellerAmount - withdrawnAmount`;
-- released protocol fee is tracked on the table as `feeAmount - feeWithdrawnAmount`;
+- released protocol fee is tracked as zero (`feeAmount == 0`);
 - seller calls `withdraw(tableId, token, amount)`;
-- release-time fee wallet calls `withdrawFees(tableId, token, amount)`.
+- there is no protocol-fee withdrawal in normal zero-fee operation.
 
 Funds are not pushed during release; withdrawal is explicit and partial per table.
 
@@ -215,5 +217,5 @@ npm run hh -- verify --network baseMainnet ^
 - Private keys must never be committed. Use local env files only.
 - ERC20 funding must use approval + `fundToken`; direct token transfers are unaccounted surplus.
 - `claimTimeout` is disabled. Silent buyers do not auto-release funds.
-- Fee withdrawals are per table/asset and pull-based.
+- Protocol fee is absolute zero in this source (`FEE_BPS = 0`); fee withdrawals remain ABI-compatible but normally have no balance.
 - The contract is verified on Base Mainnet. Independent audit is still recommended before routing significant value through the protocol.

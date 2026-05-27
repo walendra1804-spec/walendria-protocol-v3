@@ -4,6 +4,8 @@
 
 Production network: Base Mainnet.
 
+Catatan zero-fee: source ini sekarang `FEE_BPS = 0`. Contract lama di chain tidak bisa diubah; deploy ulang dari source ini sebelum menyebut alamat live sebagai absolute-zero-fee.
+
 - Chain ID: 8453
 - RPC: https://mainnet.base.org
 - Gas token: ETH
@@ -12,7 +14,7 @@ Production network: Base Mainnet.
 - Verified code: https://basescan.org/address/0xf3C5d2C9a110057138329b14c4EB124F24830dD9#code
 - Deployment tx: 0x461695bef7fbde8bbbf1c3cdac94b37a7f5b27018ea53c0f8487e4eef8d2d8e5
 - Fee wallet: 0x9f87Eae58dDB89281FDF794CD3Bd13D3e2457a99
-- Platform fee: 0.5% on release
+- Platform fee: 0% on release
 
 ## Cara Kerja
 
@@ -22,7 +24,7 @@ Production network: Base Mainnet.
 4. Buyer bebas fund amount berapa pun.
 5. Kalau buyer menerima hasil kerja, buyer panggil release(tableId).
 6. Setelah release, seller bisa withdraw(tableId, amount) per table.
-7. Fee wallet bisa withdrawFees(tableId, amount) per table.
+7. Fee wallet tetap ada untuk kompatibilitas ABI, tapi fee WP = 0 jadi normalnya tidak ada saldo fee.
 8. Kalau buyer menolak/dispute, buyer panggil burn(tableId) atau dispute(tableId).
 9. Burn mengirim dana table ke dead wallet.
 10. Tidak ada refund buyer, tidak ada proof verifier, tidak ada arbitrase, tidak ada deadline/timeout release.
@@ -74,7 +76,7 @@ Call:
 
 release(uint256 tableId)
 
-Hanya buyer fixed yang boleh call. Seller mendapat 99.5% sebagai withdrawable balance di table itu. Fee wallet mendapat 0.5%.
+Hanya buyer fixed yang boleh call. Seller mendapat 100% sebagai withdrawable balance di table itu. Fee wallet mendapat 0% karena fee WP absolut nol.
 
 ## Burn / Dispute
 
@@ -123,7 +125,7 @@ Call:
 
 withdrawFees(uint256 tableId, uint256 amount)
 
-Hanya fee wallet yang tercatat saat release yang boleh withdraw fee.
+Hanya fee wallet yang tercatat saat release yang boleh call fungsi ini, tapi pada sumber zero-fee normalnya tidak ada saldo fee untuk di-withdraw.
 
 ## Status
 

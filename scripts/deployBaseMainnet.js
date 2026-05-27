@@ -55,7 +55,7 @@ async function main() {
     owner: deployerAddress,
     feeWallet,
     deadWallet,
-    feeBps: 50,
+    feeBps: 0,
     deploymentTxHash: deploymentTx.hash,
     blockNumber: receipt.blockNumber,
     explorer: `https://basescan.org/address/${contractAddress}`,

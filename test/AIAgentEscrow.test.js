@@ -53,6 +53,16 @@ describe("AIAgentEscrow", function () {
     return tableId;
   }
 
+
+  it("quotes an absolute zero protocol fee", async function () {
+    const { escrow } = await deployFixture();
+
+    expect(await escrow.FEE_BPS()).to.equal(0n);
+    const quote = await escrow.quoteFee(123456789n);
+    expect(quote.feeAmount).to.equal(0n);
+    expect(quote.sellerAmount).to.equal(123456789n);
+  });
+
   it("creates an empty asset-agnostic table with fixed seller and buyer", async function () {
     const { escrow, buyer, seller } = await deployFixture();
     const buyerAddress = await buyer.getAddress();
@@ -129,25 +139,27 @@ describe("AIAgentEscrow", function () {
     expect(assets).to.deep.equal([await usdc.getAddress(), await dai.getAddress()]);
 
     await (await escrow.connect(buyer).release(tableId, ZERO_GAS)).wait();
-    const usdcFee = (usdcAmount * 50n) / 10000n;
-    const usdcSeller = usdcAmount - usdcFee;
-    const daiFee = (daiAmount * 50n) / 10000n;
-    const daiSeller = daiAmount - daiFee;
+    const usdcFee = 0n;
+    const usdcSeller = usdcAmount;
+    const daiFee = 0n;
+    const daiSeller = daiAmount;
+    const usdcAsset = await escrow.getAssetBalance(tableId, await usdc.getAddress());
+    const daiAsset = await escrow.getAssetBalance(tableId, await dai.getAddress());
+    expect(usdcAsset.feeAmount).to.equal(usdcFee);
+    expect(daiAsset.feeAmount).to.equal(daiFee);
 
     await (await escrow.connect(seller).withdraw(tableId, await usdc.getAddress(), usdcSeller, ZERO_GAS)).wait();
     await (await escrow.connect(seller).withdraw(tableId, await dai.getAddress(), daiSeller, ZERO_GAS)).wait();
-    await (await escrow.connect(feeWallet).withdrawFees(tableId, await usdc.getAddress(), usdcFee, ZERO_GAS)).wait();
-    await (await escrow.connect(feeWallet).withdrawFees(tableId, await dai.getAddress(), daiFee, ZERO_GAS)).wait();
 
     expect(await usdc.balanceOf(await seller.getAddress())).to.equal(usdcSeller);
     expect(await dai.balanceOf(await seller.getAddress())).to.equal(daiSeller);
-    expect(await usdc.balanceOf(await feeWallet.getAddress())).to.equal(usdcFee);
-    expect(await dai.balanceOf(await feeWallet.getAddress())).to.equal(daiFee);
+    expect(await usdc.balanceOf(await feeWallet.getAddress())).to.equal(0n);
+    expect(await dai.balanceOf(await feeWallet.getAddress())).to.equal(0n);
     expect(await escrow.totalAccountedByAsset(await usdc.getAddress())).to.equal(0n);
     expect(await escrow.totalAccountedByAsset(await dai.getAddress())).to.equal(0n);
   });
 
-  it("releases native funding and supports partial seller and fee withdrawal", async function () {
+  it("releases native funding with zero protocol fee", async function () {
     const { escrow, buyer, seller, feeWallet, stranger } = await deployFixture();
     const tableId = await createAndFund(escrow, buyer, seller);
     const sellerBefore = await ethers.provider.getBalance(await seller.getAddress());
@@ -158,8 +170,8 @@ describe("AIAgentEscrow", function () {
 
     await (await escrow.connect(buyer).release(tableId, ZERO_GAS)).wait();
 
-    const fee = (FIRST_FUND * 50n) / 10000n;
-    const sellerAmount = FIRST_FUND - fee;
+    const fee = 0n;
+    const sellerAmount = FIRST_FUND;
     let nativeAsset = await escrow.getAssetBalance(tableId, ZERO);
     expect(nativeAsset.sellerAmount).to.equal(sellerAmount);
     expect(nativeAsset.feeAmount).to.equal(fee);
@@ -184,10 +196,12 @@ describe("AIAgentEscrow", function () {
     ).to.be.revertedWithCustomError(escrow, "InsufficientWithdrawable");
 
     await (await escrow.connect(seller).withdraw(tableId, ZERO, sellerAmount - firstWithdraw, ZERO_GAS)).wait();
-    await (await escrow.connect(feeWallet).withdrawFees(tableId, ZERO, fee, ZERO_GAS)).wait();
+    await expect(escrow.connect(feeWallet).withdrawFees(tableId, ZERO, 1n, ZERO_GAS))
+      .to.be.revertedWithCustomError(escrow, "InsufficientWithdrawable")
+      .withArgs(0n);
 
     expect(await ethers.provider.getBalance(await seller.getAddress())).to.equal(sellerBefore + sellerAmount);
-    expect(await ethers.provider.getBalance(await feeWallet.getAddress())).to.equal(feeBefore + fee);
+    expect(await ethers.provider.getBalance(await feeWallet.getAddress())).to.equal(feeBefore);
     expect(await escrow.totalAccountedByAsset(ZERO)).to.equal(0n);
   });
 
@@ -198,12 +212,13 @@ describe("AIAgentEscrow", function () {
     await (await escrow.connect(buyer).release(tableId, ZERO_GAS)).wait();
     await (await escrow.connect(owner).updateFeeWallet(await newFeeWallet.getAddress(), ZERO_GAS)).wait();
 
-    const fee = (FIRST_FUND * 50n) / 10000n;
     await expect(
-      escrow.connect(newFeeWallet).withdrawFees(tableId, ZERO, fee, ZERO_GAS)
+      escrow.connect(newFeeWallet).withdrawFees(tableId, ZERO, 1n, ZERO_GAS)
     ).to.be.revertedWithCustomError(escrow, "OnlyReleaseFeeWallet");
 
-    await expect(escrow.connect(feeWallet).withdrawFees(tableId, ZERO, fee, ZERO_GAS)).to.not.be.reverted;
+    await expect(escrow.connect(feeWallet).withdrawFees(tableId, ZERO, 1n, ZERO_GAS))
+      .to.be.revertedWithCustomError(escrow, "InsufficientWithdrawable")
+      .withArgs(0n);
   });
 
   it("burns all assets on buyer burn and leaves no seller or fee withdrawal", async function () {
@@ -271,10 +286,9 @@ describe("AIAgentEscrow", function () {
 
     await expect(escrow.connect(buyer).release(tableId, ZERO_GAS)).to.not.be.reverted;
 
-    const fee = (FIRST_FUND * 50n) / 10000n;
-    await expect(
-      escrow.connect(feeWallet).withdrawFees(tableId, ZERO, fee, ZERO_GAS)
-    ).to.not.be.reverted;
+    const nativeAsset = await escrow.getAssetBalance(tableId, ZERO);
+    expect(nativeAsset.sellerAmount).to.equal(FIRST_FUND);
+    expect(nativeAsset.feeAmount).to.equal(0n);
   });
 
   it("lets owner rescue only surplus native and ERC20, not accounted escrow funds", async function () {
