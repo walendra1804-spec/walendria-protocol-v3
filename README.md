@@ -1,16 +1,18 @@
-# AI Agent Escrow Gateway
+# Walendria Protocol V3
 
-Base-layer escrow infrastructure for autonomous AI agents. No UI, no custody, no negotiation layer. The protocol exposes a minimal smart contract surface for locking funds, releasing value, burning disputed value, and withdrawing accumulated balances.
+Base-layer escrow infrastructure for autonomous AI agents and digital work. Walendria Protocol V3 exposes fixed seller/buyer tables, buyer-only funding, buyer release, buyer burn/dispute, multi-asset accounting, and per-table withdrawals.
 
-## First Principles: Pay or Burn
+## First Principles: Release or Burn
 
 The protocol uses a deliberately hard settlement rule:
 
-- Pay: if the buyer agent accepts the result, funds are released to the seller through `pendingWithdrawals`.
-- Burn: if the buyer agent disputes before timeout, the full escrow amount is sent to the dead wallet.
-- Timeout: if the buyer agent stays silent until the agreed deadline passes, anyone may finalize the escrow and release funds to the seller.
+- Create: a table fixes one seller wallet and one buyer/controller wallet.
+- Fund: only the fixed buyer can fund the table, with any amount, after creation.
+- Release: if the buyer accepts the result, funds become withdrawable by the seller, minus the 0.5% protocol fee.
+- Burn: if the buyer rejects/disputes, the funded value is sent to the dead wallet.
+- No timeout: `claimTimeout` intentionally reverts. A silent buyer does not auto-release funds to the seller.
 
-This is a base protocol, not a consumer arbitration product. It does not protect users from bad duration choices, weak off-chain agreements, or poor counterparty selection. It only enforces the rules committed on-chain.
+This is a base protocol, not a consumer arbitration product. It does not verify proof, judge work, refund buyers, or resolve disputes. It only enforces the release-or-burn table rules committed on-chain.
 
 ## Mainnet Deployment
 
@@ -19,19 +21,19 @@ Network: Base Mainnet
 Contract:
 
 ```text
-0xc2a7524864d1998454EB6CF09242B9D33257F6Bf
+0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
 ```
 
 Verified source:
 
 ```text
-https://basescan.org/address/0xc2a7524864d1998454EB6CF09242B9D33257F6Bf#code
+https://basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D#code
 ```
 
 Deployment transaction:
 
 ```text
-0xcf36bf2e4d01a4697627a6f26327c6e164d9b7fa947288f71c8e7dcbd67e515a
+0xe1eb3be0cccf20f5b08715ed24f3582c0f791b0d80487ab4c8bc407195811c94
 ```
 
 Fee wallet:
@@ -40,31 +42,35 @@ Fee wallet:
 0x9f87Eae58dDB89281FDF794CD3Bd13D3e2457a99
 ```
 
-Platform fee: `0.5%` on `release` and `timeout`.
+Platform fee: `0.5%` on `release`. `claimTimeout` is disabled and intentionally reverts.
 
 ## Testnet Deployment
 
 Base Sepolia remains available for integration tests:
 
 ```text
-https://sepolia.basescan.org/address/0xc2a7524864d1998454EB6CF09242B9D33257F6Bf
+https://sepolia.basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
 ```
 
 ## Core Contract Flow
 
-- `createEscrow(seller, durationSeconds, agreementHash)` locks native ETH.
-- `release(escrowId)` records seller and platform fee balances as pending withdrawals.
-- `dispute(escrowId)` burns the full escrow amount to `0x000000000000000000000000000000000000dEaD`.
-- `claimTimeout(escrowId)` is manual and permissionless after the deadline.
-- `withdraw()` lets each recipient pull their accumulated pending balance.
+- `createTable(seller, buyer)` / `createEscrow(seller, buyer)` creates an empty table with fixed seller and buyer/controller.
+- `fund(tableId)` is payable native ETH funding and can only be called by the fixed buyer.
+- `fundToken(tableId, token, amount)` funds ERC20 assets after token approval; do not direct-transfer ERC20 tokens to the contract as normal wallet payments.
+- `release(tableId)` snapshots seller/fee withdrawable balances.
+- `burn(tableId)` / `dispute(tableId)` burns the table funds to `0x000000000000000000000000000000000000dEaD`.
+- `claimTimeout(tableId)` intentionally reverts; timeout release is disabled.
+- `withdraw(tableId, token, amount)` lets the seller withdraw released funds per table/asset.
+- `withdrawFees(tableId, token, amount)` lets the release-time fee wallet withdraw protocol fees per table/asset.
 
-Settlement uses pull-payment:
+Settlement uses per-table pull-payment accounting:
 
-```solidity
-pendingWithdrawals[recipient] += amount;
-```
+- released seller amount is tracked on the table as `sellerAmount - withdrawnAmount`;
+- released protocol fee is tracked on the table as `feeAmount - feeWithdrawnAmount`;
+- seller calls `withdraw(tableId, token, amount)`;
+- release-time fee wallet calls `withdrawFees(tableId, token, amount)`.
 
-Recipients can withdraw accumulated balances in a single call. Fee withdrawals are cumulative, not per-transaction.
+Funds are not pushed during release; withdrawal is explicit and partial per table.
 
 ## Quick Start
 
@@ -139,7 +145,7 @@ Set environment variables for Base Mainnet:
 
 ```bash
 set AI_ESCROW_RPC_URL=https://mainnet.base.org
-set AI_ESCROW_CONTRACT_ADDRESS=0xc2a7524864d1998454EB6CF09242B9D33257F6Bf
+set AI_ESCROW_CONTRACT_ADDRESS=0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
 set AI_BUYER_PRIVATE_KEY=0x_buyer_agent_private_key
 set AI_SELLER_ADDRESS=0x_seller_agent_wallet
 set AI_ESCROW_CHAIN_ID=8453
@@ -206,8 +212,8 @@ npm run hh -- verify --network baseMainnet ^
 
 ## Security Notes
 
-- `agreementHash` must be unique and non-zero.
-- There is no minimum duration by design.
-- Timeout is manual and permissionless.
-- Fee withdrawals are cumulative, not per-transaction.
+- Private keys must never be committed. Use local env files only.
+- ERC20 funding must use approval + `fundToken`; direct token transfers are unaccounted surplus.
+- `claimTimeout` is disabled. Silent buyers do not auto-release funds.
+- Fee withdrawals are per table/asset and pull-based.
 - The contract is verified on Base Mainnet. Independent audit is still recommended before routing significant value through the protocol.

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
-import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -16,83 +14,143 @@ ESCROW_ABI: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "createEscrow",
-        "stateMutability": "payable",
+        "stateMutability": "nonpayable",
         "inputs": [
             {"name": "seller", "type": "address"},
-            {"name": "durationSeconds", "type": "uint64"},
-            {"name": "agreementHash", "type": "bytes32"},
+            {"name": "buyer", "type": "address"},
         ],
-        "outputs": [{"name": "escrowId", "type": "uint256"}],
+        "outputs": [{"name": "tableId", "type": "uint256"}],
+    },
+    {
+        "type": "function",
+        "name": "createTable",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "seller", "type": "address"},
+            {"name": "buyer", "type": "address"},
+        ],
+        "outputs": [{"name": "tableId", "type": "uint256"}],
+    },
+    {
+        "type": "function",
+        "name": "fund",
+        "stateMutability": "payable",
+        "inputs": [{"name": "tableId", "type": "uint256"}],
+        "outputs": [],
+    },
+    {
+        "type": "function",
+        "name": "fundToken",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "tableId", "type": "uint256"},
+            {"name": "token", "type": "address"},
+            {"name": "amount", "type": "uint256"},
+        ],
+        "outputs": [],
     },
     {
         "type": "function",
         "name": "release",
         "stateMutability": "nonpayable",
-        "inputs": [{"name": "escrowId", "type": "uint256"}],
+        "inputs": [{"name": "tableId", "type": "uint256"}],
+        "outputs": [],
+    },
+    {
+        "type": "function",
+        "name": "burn",
+        "stateMutability": "nonpayable",
+        "inputs": [{"name": "tableId", "type": "uint256"}],
         "outputs": [],
     },
     {
         "type": "function",
         "name": "dispute",
         "stateMutability": "nonpayable",
-        "inputs": [{"name": "escrowId", "type": "uint256"}],
+        "inputs": [{"name": "tableId", "type": "uint256"}],
         "outputs": [],
     },
     {
         "type": "function",
         "name": "claimTimeout",
-        "stateMutability": "nonpayable",
-        "inputs": [{"name": "escrowId", "type": "uint256"}],
+        "stateMutability": "pure",
+        "inputs": [{"name": "tableId", "type": "uint256"}],
         "outputs": [],
     },
     {
         "type": "function",
         "name": "withdraw",
         "stateMutability": "nonpayable",
-        "inputs": [],
+        "inputs": [
+            {"name": "tableId", "type": "uint256"},
+            {"name": "token", "type": "address"},
+            {"name": "amount", "type": "uint256"},
+        ],
         "outputs": [],
     },
     {
         "type": "function",
-        "name": "pendingWithdrawals",
-        "stateMutability": "view",
-        "inputs": [{"name": "account", "type": "address"}],
-        "outputs": [{"name": "", "type": "uint256"}],
+        "name": "withdrawFees",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "tableId", "type": "uint256"},
+            {"name": "token", "type": "address"},
+            {"name": "amount", "type": "uint256"},
+        ],
+        "outputs": [],
     },
     {
         "type": "function",
-        "name": "usedAgreementHash",
+        "name": "getTable",
         "stateMutability": "view",
-        "inputs": [{"name": "agreementHash", "type": "bytes32"}],
-        "outputs": [{"name": "", "type": "bool"}],
+        "inputs": [{"name": "tableId", "type": "uint256"}],
+        "outputs": [
+            {"name": "seller", "type": "address"},
+            {"name": "buyer", "type": "address"},
+            {"name": "fundedAmount", "type": "uint256"},
+            {"name": "balance", "type": "uint256"},
+            {"name": "withdrawnAmount", "type": "uint256"},
+            {"name": "status", "type": "uint8"},
+        ],
+    },
+    {
+        "type": "function",
+        "name": "quoteFee",
+        "stateMutability": "pure",
+        "inputs": [{"name": "amount", "type": "uint256"}],
+        "outputs": [
+            {"name": "feeAmount", "type": "uint256"},
+            {"name": "sellerAmount", "type": "uint256"},
+        ],
     },
     {
         "type": "event",
-        "name": "EscrowCreated",
+        "name": "TableCreated",
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "name": "escrowId", "type": "uint256"},
-            {"indexed": True, "name": "buyer", "type": "address"},
+            {"indexed": True, "name": "tableId", "type": "uint256"},
             {"indexed": True, "name": "seller", "type": "address"},
-            {"indexed": False, "name": "amount", "type": "uint256"},
-            {"indexed": False, "name": "deadline", "type": "uint64"},
-            {"indexed": False, "name": "agreementHash", "type": "bytes32"},
+            {"indexed": True, "name": "buyer", "type": "address"},
         ],
     },
 ]
 
 
+STATUS = {0: "None", 1: "Open", 2: "Released", 3: "Burned"}
+
+
 @dataclass(frozen=True)
-class EscrowOrder:
-    order_id: str
-    escrow_id: int
-    buyer: str
+class EscrowTable:
+    table_id: int
     seller: str
-    amount_wei: int
-    duration_seconds: int
-    agreement_hash: str
+    buyer: str
     tx_hash: str
-    deadline: int | None
+
+
+@dataclass(frozen=True)
+class TxResult:
+    tx_hash: str
+    status: int
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -135,95 +193,121 @@ class AIAgentEscrowClient:
             chain_id=int(_env("AI_ESCROW_CHAIN_ID", "8453")),
         )
 
-    def create_order_and_lock_funds(
-        self,
-        seller_address: str,
-        amount_eth: str,
-        duration_seconds: int = 3600,
-        metadata: dict[str, Any] | None = None,
-    ) -> EscrowOrder:
-        order_id = f"ord_{int(time.time())}_{uuid.uuid4().hex}"
-        seller = Web3.to_checksum_address(seller_address)
-        amount_wei = eth_to_wei(amount_eth)
-        payload = {
-            "orderId": order_id,
-            "buyer": self.account.address,
-            "seller": seller,
-            "amountWei": str(amount_wei),
-            "durationSeconds": duration_seconds,
-            "metadata": metadata or {},
-        }
-        agreement_hash_bytes = self.w3.keccak(
-            text=json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        )
-
-        tx = self.contract.functions.createEscrow(
-            seller,
-            duration_seconds,
-            agreement_hash_bytes,
-        ).build_transaction(
+    def _send(self, fn: Any, value_wei: int = 0) -> TxResult:
+        tx = fn.build_transaction(
             {
                 "from": self.account.address,
-                "value": amount_wei,
+                "value": value_wei,
                 "nonce": self.w3.eth.get_transaction_count(self.account.address),
                 "chainId": self.chain_id,
                 "gasPrice": self.w3.eth.gas_price,
             }
         )
         tx["gas"] = int(self.w3.eth.estimate_gas(tx) * 1.2)
-
         signed = self.account.sign_transaction(tx)
         raw_tx = getattr(signed, "rawTransaction", None) or signed.raw_transaction
         tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
         receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+        if receipt.status != 1:
+            raise RuntimeError(f"transaction reverted: {tx_hash.hex()}")
+        return TxResult(tx_hash=tx_hash.hex(), status=int(receipt.status))
 
-        escrow_id = -1
-        deadline = None
-        events = self.contract.events.EscrowCreated().process_receipt(receipt)
-        if events:
-            escrow_id = int(events[0]["args"]["escrowId"])
-            deadline = int(events[0]["args"]["deadline"])
-
-        return EscrowOrder(
-            order_id=order_id,
-            escrow_id=escrow_id,
-            buyer=self.account.address,
-            seller=seller,
-            amount_wei=amount_wei,
-            duration_seconds=duration_seconds,
-            agreement_hash=agreement_hash_bytes.hex(),
-            tx_hash=tx_hash.hex(),
-            deadline=deadline,
-        )
-
-    def pending_withdrawal(self, account: str | None = None) -> int:
-        address = Web3.to_checksum_address(account or self.account.address)
-        return int(self.contract.functions.pendingWithdrawals(address).call())
-
-    def withdraw(self) -> str:
-        tx = self.contract.functions.withdraw().build_transaction(
+    def _send_receipt(self, fn: Any, value_wei: int = 0) -> Any:
+        tx = fn.build_transaction(
             {
                 "from": self.account.address,
+                "value": value_wei,
                 "nonce": self.w3.eth.get_transaction_count(self.account.address),
                 "chainId": self.chain_id,
                 "gasPrice": self.w3.eth.gas_price,
             }
         )
         tx["gas"] = int(self.w3.eth.estimate_gas(tx) * 1.2)
-
         signed = self.account.sign_transaction(tx)
         raw_tx = getattr(signed, "rawTransaction", None) or signed.raw_transaction
         tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
-        self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
-        return tx_hash.hex()
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+        if receipt.status != 1:
+            raise RuntimeError(f"transaction reverted: {tx_hash.hex()}")
+        return receipt
+
+    def create_table(self, seller_address: str, buyer_address: str | None = None) -> EscrowTable:
+        seller = Web3.to_checksum_address(seller_address)
+        buyer = Web3.to_checksum_address(buyer_address or self.account.address)
+        receipt = self._send_receipt(self.contract.functions.createTable(seller, buyer))
+        events = self.contract.events.TableCreated().process_receipt(receipt)
+        if not events:
+            raise RuntimeError("TableCreated event not found")
+        table_id = int(events[0]["args"]["tableId"])
+        return EscrowTable(table_id=table_id, seller=seller, buyer=buyer, tx_hash=receipt.transactionHash.hex())
+
+    def fund(self, table_id: int, amount_eth: str | Decimal) -> TxResult:
+        return self._send(self.contract.functions.fund(table_id), value_wei=eth_to_wei(amount_eth))
+
+    def release(self, table_id: int) -> TxResult:
+        return self._send(self.contract.functions.release(table_id))
+
+    def burn(self, table_id: int) -> TxResult:
+        return self._send(self.contract.functions.burn(table_id))
+
+    def dispute(self, table_id: int) -> TxResult:
+        return self._send(self.contract.functions.dispute(table_id))
+
+    def fund_token(self, table_id: int, token_address: str, amount_units: int) -> TxResult:
+        token = Web3.to_checksum_address(token_address)
+        return self._send(self.contract.functions.fundToken(table_id, token, int(amount_units)))
+
+    def withdraw(self, table_id: int, token_address: str, amount_units: int) -> TxResult:
+        token = Web3.to_checksum_address(token_address)
+        return self._send(self.contract.functions.withdraw(table_id, token, int(amount_units)))
+
+    def withdraw_fees(self, table_id: int, token_address: str, amount_units: int) -> TxResult:
+        token = Web3.to_checksum_address(token_address)
+        return self._send(self.contract.functions.withdrawFees(table_id, token, int(amount_units)))
+
+    def get_table(self, table_id: int) -> dict[str, Any]:
+        seller, buyer, funded, balance, withdrawn, status = self.contract.functions.getTable(table_id).call()
+        return {
+            "tableId": int(table_id),
+            "seller": seller,
+            "buyer": buyer,
+            "fundedAmount": int(funded),
+            "balance": int(balance),
+            "withdrawnAmount": int(withdrawn),
+            "status": STATUS.get(int(status), str(status)),
+        }
+
+    def quote_fee(self, amount_eth: str | Decimal) -> dict[str, int]:
+        fee, seller = self.contract.functions.quoteFee(eth_to_wei(amount_eth)).call()
+        return {"feeAmount": int(fee), "sellerAmount": int(seller)}
+
+    # Backward-compatible helper for old demo scripts: now this creates an empty table, then funds it.
+    def create_order_and_lock_funds(
+        self,
+        seller_address: str,
+        amount_eth: str,
+        duration_seconds: int = 0,  # Ignored in MP v2; no timeout/deadline path.
+        metadata: dict[str, Any] | None = None,  # Off-chain only.
+    ) -> dict[str, Any]:
+        table = self.create_table(seller_address=seller_address, buyer_address=self.account.address)
+        fund_tx = self.fund(table.table_id, amount_eth)
+        return {
+            "table_id": table.table_id,
+            "buyer": table.buyer,
+            "seller": table.seller,
+            "amount_wei": eth_to_wei(amount_eth),
+            "create_tx_hash": table.tx_hash,
+            "fund_tx_hash": fund_tx.tx_hash,
+            "metadata": metadata or {},
+            "note": "MP v2 has no deadline/timeout; buyer controls release or burn.",
+        }
 
 
 if __name__ == "__main__":
     client = AIAgentEscrowClient.from_env()
-    order = client.create_order_and_lock_funds(
-        seller_address=_env("AI_SELLER_ADDRESS"),
-        amount_eth=_env("AI_ESCROW_AMOUNT_ETH", "0.001"),
-        duration_seconds=int(_env("AI_ESCROW_DURATION_SECONDS", "3600")),
-        metadata={"source": "python-sdk-copy-paste"},
-    )
-    print(json.dumps(order.__dict__, indent=2))
+    table = client.create_table(seller_address=_env("AI_SELLER_ADDRESS"))
+    if os.getenv("AI_ESCROW_AMOUNT_ETH"):
+        funding = client.fund(table.table_id, _env("AI_ESCROW_AMOUNT_ETH"))
+        print(json.dumps({"table": table.__dict__, "funding": funding.__dict__}, indent=2))
+    else:
+        print(json.dumps(table.__dict__, indent=2))

@@ -1,191 +1,152 @@
-# AI Agent Escrow Gateway API
+# Walendria Protocol V3 API
 
-## Network Choice
+Formerly Meridian Protocol.
 
-Target production network: Base Mainnet. Alasannya: EVM-compatible, biaya rendah, likuiditas ekosistem kuat, dan tooling developer matang untuk Hardhat, ethers, indexer, dan agent backend.
+Network: Base Mainnet
+Contract: `0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D`
+Explorer: https://basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
+Fee: 0.5% on release
+Dead wallet: `0x000000000000000000000000000000000000dEaD`
 
-Local simulation di repo ini memakai Hardhat Network. Asset yang dikunci adalah native coin EVM:
+## Mental Model
 
-- Hardhat lokal: ETH simulasi
-- Base Mainnet: ETH native
+A table is a fixed buyer/seller escrow slot. Creation fixes authority. Funding comes later.
 
-## Architecture
+- Seller is fixed at creation.
+- Buyer/controller is fixed at creation.
+- Only buyer can fund.
+- Buyer can release.
+- Buyer can burn/dispute.
+- Seller withdraws only after release.
+- There is no refund, proof verifier, arbitrator, deadline, or timeout release.
 
-Komponen:
+## Functions verified from Solidity source
 
-- AI Buyer Agent: wallet yang membuat escrow, mengunci dana, lalu memanggil `release` atau `dispute`.
-- AI Seller Agent: wallet penerima dana jika transaksi sukses atau timeout.
-- Escrow Smart Contract: menyimpan dana, status, deadline, fee, pending withdrawal, dan event.
-- Fee Wallet: wallet pemilik infrastruktur. Mendapat saldo pending 0.5% saat `release` dan `timeout`, lalu menariknya dengan `withdraw`.
-- Dead Wallet: address burn. Menerima 100% dana saat `dispute`.
-- Manual Timeout Caller: siapa pun boleh memanggil `claimTimeout` setelah deadline. Tidak ada keeper khusus di protokol.
-
-State escrow:
-
-- `Funded`: dana terkunci.
-- `Released`: buyer menyetujui, seller mendapat pending withdrawal 99.5%, fee wallet mendapat pending withdrawal 0.5%.
-- `Burned`: buyer dispute sebelum deadline, 100% dana dikirim ke dead wallet.
-- `TimedOut`: deadline lewat, siapa pun memanggil timeout, seller mendapat pending withdrawal 99.5%, fee wallet mendapat pending withdrawal 0.5%.
-
-Catatan timeout: smart contract tidak bisa memanggil dirinya sendiri. Protokol hanya menyediakan fungsi manual permissionless `claimTimeout(escrowId)` setelah `deadline`.
-
-## Contract Methods
-
-### Create Escrow
-
-Locks native coin into the contract. `agreementHash` wajib unik dan tidak boleh `bytes32(0)`.
+### createTable
 
 ```solidity
-function createEscrow(
-    address seller,
-    uint64 durationSeconds,
-    bytes32 agreementHash
-) external payable returns (uint256 escrowId);
+function createTable(address seller, address buyer) external returns (uint256 tableId)
 ```
 
-Parameters:
+Creates an empty open table.
 
-- `seller`: wallet AI seller.
-- `durationSeconds`: durasi escrow sejak block timestamp transaksi dibuat.
-- `agreementHash`: hash dokumen/order/spec off-chain. Gunakan `ethers.id("...")` atau hash IPFS/CID/order payload.
-- `msg.value`: dana yang dikunci.
-
-Ethers.js:
-
-```js
-const tx = await escrow.connect(buyer).createEscrow(
-  sellerAddress,
-  3600,
-  ethers.id("order:123"),
-  { value: ethers.parseEther("1") }
-);
-const receipt = await tx.wait();
-```
-
-### Release API
-
-Buyer menyetujui barang/jasa. Kontrak mencatat 0.5% sebagai pending withdrawal fee wallet dan sisanya sebagai pending withdrawal seller.
+### createEscrow
 
 ```solidity
-function release(uint256 escrowId) external;
+function createEscrow(address seller, address buyer) external returns (uint256 tableId)
 ```
 
-Rules:
+Alias for createTable, kept for old integrations.
 
-- Caller harus buyer asli.
-- Escrow harus masih `Funded`.
-- Fee = `amount * 50 / 10000`.
-- Seller pending balance = `amount - fee`.
-- Tidak ada push transfer ke seller/fee wallet di fungsi ini.
-
-Ethers.js:
-
-```js
-await (await escrow.connect(buyer).release(escrowId)).wait();
-```
-
-### Dispute / Burn API
-
-Buyer menolak transaksi sebelum deadline. Semua dana dikirim ke dead wallet.
+### fund
 
 ```solidity
-function dispute(uint256 escrowId) external;
+function fund(uint256 tableId) external payable
 ```
 
-Rules:
+Only the fixed buyer can call. `msg.value` is added as native Base ETH for that table.
 
-- Caller harus buyer asli.
-- Escrow harus masih `Funded`.
-- Hanya bisa sebelum deadline.
-- Seller dan fee wallet tidak menerima apa pun.
-
-Ethers.js:
-
-```js
-await (await escrow.connect(buyer).dispute(escrowId)).wait();
-```
-
-### Timeout API
-
-Fallback ketika buyer tidak memanggil `release` atau `dispute` sampai escrow lewat deadline. Dana dicatat sebagai pending withdrawal seller dengan fee 0.5% ke fee wallet.
+### fundToken
 
 ```solidity
-function claimTimeout(uint256 escrowId) external;
+function fundToken(uint256 tableId, address token, uint256 amount) external
 ```
 
-Rules:
+Only the fixed buyer can call. Buyer must approve the WP contract first, then call `fundToken`. Do not direct-transfer ERC20 tokens to the contract as normal payment.
 
-- Caller boleh siapa pun.
-- Escrow harus masih `Funded`.
-- `block.timestamp` harus lebih besar dari `deadline`.
-- Seller pending balance bertambah 99.5%, fee wallet pending balance bertambah 0.5%.
-- Tidak ada keeper khusus di protokol. Fungsi ini murni permissionless dan manual.
-
-Ethers.js:
-
-```js
-await (await escrow.connect(anyCaller).claimTimeout(escrowId)).wait();
-```
-
-### Withdraw API
-
-Seller atau fee wallet menarik saldo pending miliknya sendiri.
+### release
 
 ```solidity
-function withdraw() external;
+function release(uint256 tableId) external
 ```
 
-Rules:
+Only the fixed buyer can call while the table is open and funded. It marks the table Released and snapshots seller/fee balances per asset. No funds are pushed during release.
 
-- Caller hanya bisa menarik `pendingWithdrawals[msg.sender]`.
-- Saldo pending di-zero-kan sebelum native transfer.
-- Jika caller adalah smart contract yang menolak native token, withdrawal miliknya sendiri akan gagal, tetapi escrow lain tidak ikut macet.
-
-Ethers.js:
-
-```js
-await (await escrow.connect(seller).withdraw()).wait();
-await (await escrow.connect(feeWallet).withdraw()).wait();
-```
-
-### Pending Balance API
+### burn / dispute
 
 ```solidity
-function pendingWithdrawals(address account) external view returns (uint256);
-function usedAgreementHash(bytes32 agreementHash) external view returns (bool);
+function burn(uint256 tableId) external
+function dispute(uint256 tableId) external
 ```
 
-## Optional REST Gateway Mapping
+Only the fixed buyer can call while the table is open and funded. Sends table assets to the dead wallet and marks the table Burned. `dispute` is an alias for burn. This is destructive settlement, not refund.
 
-Jika nanti ingin membuat HTTP API untuk AI agents, endpoint dapat memetakan langsung ke contract call:
+### claimTimeout
 
-```http
-POST /v1/escrows
-POST /v1/escrows/:escrowId/release
-POST /v1/escrows/:escrowId/dispute
-POST /v1/escrows/:escrowId/timeout
-POST /v1/withdraw
-GET  /v1/escrows/:escrowId
+```solidity
+function claimTimeout(uint256 tableId) external pure
 ```
 
-Gateway sebaiknya tidak custody private key user. Agent buyer/seller tetap sign transaksi sendiri, atau memakai account abstraction/session key dengan policy yang jelas.
+Always reverts with `TimeoutDisabled`. Timeout release is intentionally removed.
 
-## Events
+### withdraw
 
-Indexer/agent dapat memantau:
+```solidity
+function withdraw(uint256 tableId, address token, uint256 amount) external
+```
 
-- `EscrowCreated(escrowId, buyer, seller, amount, deadline, agreementHash)`
-- `EscrowReleased(escrowId, buyer, seller, amount, sellerAmount, feeAmount, feeWallet)`
-- `EscrowBurned(escrowId, buyer, deadWallet, amount)`
-- `EscrowTimedOut(escrowId, buyer, seller, amount, sellerAmount, feeAmount, feeWallet)`
-- `FeeWalletUpdated(oldFeeWallet, newFeeWallet)`
-- `WithdrawalClaimed(account, amount)`
+Only the fixed seller can call after release. Supports partial withdrawal per table and asset. Native ETH uses `address(0)`.
 
-## Safety Notes
+### withdrawFees
 
-- Burn native coin dilakukan dengan transfer ke `0x000000000000000000000000000000000000dEaD`.
-- Fee memakai basis points: 50 bps = 0.5%.
-- Fee dibulatkan ke bawah oleh integer division. Kontrak menolak nominal terlalu kecil agar fee minimal 1 wei.
-- Timeout tetap manual permissionless: siapa pun boleh memanggil `claimTimeout` setelah deadline.
-- Tidak ada `MIN_DURATION`; durasi escrow adalah keputusan caller.
-- Sebelum mainnet, jalankan test, fuzzing tambahan, dan audit eksternal jika kontrak akan memegang dana nyata.
+```solidity
+function withdrawFees(uint256 tableId, address token, uint256 amount) external
+```
+
+Only the release-time fee wallet can call after release. Supports partial fee withdrawal per table and asset.
+
+### getTable
+
+```solidity
+function getTable(uint256 tableId) external view returns (
+  address seller,
+  address buyer,
+  uint256 fundedAmount,
+  uint256 balance,
+  uint256 withdrawnAmount,
+  EscrowStatus status
+)
+```
+
+EscrowStatus: `0=None`, `1=Open`, `2=Released`, `3=Burned`.
+
+### getTableAssets
+
+```solidity
+function getTableAssets(uint256 tableId) external view returns (address[] memory assets)
+```
+
+Returns asset addresses used by this table. Native ETH is `address(0)`.
+
+### getAssetBalance
+
+```solidity
+function getAssetBalance(uint256 tableId, address token) external view returns (
+  uint256 fundedAmount,
+  uint256 balance,
+  uint256 sellerAmount,
+  uint256 feeAmount,
+  uint256 withdrawnAmount,
+  uint256 feeWithdrawnAmount,
+  uint256 burnedAmount
+)
+```
+
+Reads per-table/per-asset accounting.
+
+### quoteFee
+
+```solidity
+function quoteFee(uint256 amount) public pure returns (uint256 feeAmount, uint256 sellerAmount)
+```
+
+Returns 0.5% fee and seller net amount.
+
+## Example Flow
+
+1. Create table: `createTable(seller, buyer)`.
+2. Native ETH: buyer calls `fund(tableId)` with ETH value.
+3. ERC20: buyer approves WP contract, then calls `fundToken(tableId, token, amount)`.
+4. Buyer chooses `release(tableId)` or `burn(tableId)`.
+5. If released, seller calls `withdraw(tableId, token, amount)`.
+6. Fee wallet calls `withdrawFees(tableId, token, amount)`.

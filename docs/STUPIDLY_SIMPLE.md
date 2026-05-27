@@ -1,189 +1,174 @@
-# AI Agent Escrow - Stupidly Simple Docs
+# Meridian Protocol / AI Agent Escrow - Stupidly Simple Docs
 
 ## Network
 
 Production network: Base Mainnet.
 
-- Chain ID: `8453`
-- RPC: `https://mainnet.base.org`
-- Gas token: `ETH`
-- Explorer: `https://basescan.org`
-- Contract address: `0xc2a7524864d1998454EB6CF09242B9D33257F6Bf`
-- Verified code: `https://basescan.org/address/0xc2a7524864d1998454EB6CF09242B9D33257F6Bf#code`
-
-Deployment metadata:
-
-```text
-deployments/base-mainnet.json
-```
-
-Base Sepolia is available only as a test environment:
-
-```text
-deployments/base-sepolia.json
-```
+- Chain ID: 8453
+- RPC: https://mainnet.base.org
+- Gas token: ETH
+- Explorer: https://basescan.org
+- Contract address: 0xf3C5d2C9a110057138329b14c4EB124F24830dD9
+- Verified code: https://basescan.org/address/0xf3C5d2C9a110057138329b14c4EB124F24830dD9#code
+- Deployment tx: 0x461695bef7fbde8bbbf1c3cdac94b37a7f5b27018ea53c0f8487e4eef8d2d8e5
+- Fee wallet: 0x9f87Eae58dDB89281FDF794CD3Bd13D3e2457a99
+- Platform fee: 0.5% on release
 
 ## Cara Kerja
 
-1. Buyer AI bikin order.
-2. Buyer AI lock ETH ke smart contract.
-3. Kalau barang/jasa benar, Buyer AI panggil `release`.
-4. Seller mendapat saldo pending 99.5%.
-5. Fee wallet pemilik protokol mendapat saldo pending 0.5%.
-6. Kalau seller gagal/menipu, Buyer AI panggil `dispute`.
-7. Saat dispute, 100% dana dikirim ke dead wallet.
-8. Kalau buyer diam sampai deadline, siapa pun boleh panggil `claimTimeout`.
-9. Saat timeout, Seller mendapat saldo pending 99.5% dan fee wallet mendapat saldo pending 0.5%.
-10. Seller dan fee wallet memanggil `withdraw()` untuk menarik dana masing-masing.
+1. Seller dan buyer/controller ditentukan saat table dibuat.
+2. Table dibuat kosong: tidak ada amount saat create.
+3. Hanya buyer yang boleh fund table.
+4. Buyer bebas fund amount berapa pun.
+5. Kalau buyer menerima hasil kerja, buyer panggil release(tableId).
+6. Setelah release, seller bisa withdraw(tableId, amount) per table.
+7. Fee wallet bisa withdrawFees(tableId, amount) per table.
+8. Kalau buyer menolak/dispute, buyer panggil burn(tableId) atau dispute(tableId).
+9. Burn mengirim dana table ke dead wallet.
+10. Tidak ada refund buyer, tidak ada proof verifier, tidak ada arbitrase, tidak ada deadline/timeout release.
 
-Tidak ada keeper khusus dan tidak ada minimal durasi. Kalau user set escrow 1 detik, itu keputusan user.
+Inti protokol: buyer cuma punya dua tombol settlement: release atau burn.
 
-## Payload Create Escrow
+## Create Table
 
-```json
+Payload:
+
 {
   "seller": "0xSellerWallet",
-  "amountWei": "10000000000000000",
-  "durationSeconds": 3600,
-  "orderId": "ord_1778718000_abcd1234",
-  "agreementHash": "0x32_bytes_hash_of_order_payload_unik"
+  "buyer": "0xBuyerControllerWallet"
 }
-```
 
 Call:
 
-```solidity
-createEscrow(address seller, uint64 durationSeconds, bytes32 agreementHash)
-```
+createTable(address seller, address buyer)
 
-Native ETH dikirim sebagai `msg.value`. `agreementHash` wajib unik dan tidak boleh `0x00...00`.
+Alias:
 
-## Payload Release
+createEscrow(address seller, address buyer)
 
-```json
+## Fund
+
+Payload:
+
 {
-  "escrowId": "1",
+  "tableId": "1",
+  "amountWei": "1000000000000"
+}
+
+Call:
+
+fund(uint256 tableId)
+
+Native ETH dikirim sebagai msg.value. Hanya buyer fixed yang boleh fund.
+
+## Release
+
+Payload:
+
+{
+  "tableId": "1",
   "action": "release"
 }
-```
 
 Call:
 
-```solidity
-release(uint256 escrowId)
-```
+release(uint256 tableId)
 
-Hanya buyer asli yang boleh call. Dana belum masuk wallet seller/fee; saldo masuk ke `pendingWithdrawals`.
+Hanya buyer fixed yang boleh call. Seller mendapat 99.5% sebagai withdrawable balance di table itu. Fee wallet mendapat 0.5%.
 
-## Payload Dispute / Burn
+## Burn / Dispute
 
-```json
+Payload:
+
 {
-  "escrowId": "1",
-  "action": "dispute"
+  "tableId": "1",
+  "action": "burn"
 }
-```
 
 Call:
 
-```solidity
-dispute(uint256 escrowId)
-```
+burn(uint256 tableId)
 
-Hanya buyer asli yang boleh call sebelum deadline.
+Alias:
 
-## Payload Timeout
+dispute(uint256 tableId)
 
-```json
+Hanya buyer fixed yang boleh call. Dana dikirim ke dead wallet.
+
+## Withdraw Seller
+
+Payload:
+
 {
-  "escrowId": "1",
-  "action": "timeout"
+  "tableId": "1",
+  "amountWei": "995000000000"
 }
-```
 
 Call:
 
-```solidity
-claimTimeout(uint256 escrowId)
-```
+withdraw(uint256 tableId, uint256 amount)
 
-Siapa pun boleh call setelah deadline. Dana belum masuk wallet seller/fee; saldo masuk ke `pendingWithdrawals`.
+Hanya seller fixed yang boleh withdraw setelah release.
 
-## Payload Withdraw
+## Withdraw Fee
 
-```json
+Payload:
+
 {
-  "action": "withdraw"
+  "tableId": "1",
+  "amountWei": "5000000000"
 }
-```
 
 Call:
 
-```solidity
-withdraw()
-```
+withdrawFees(uint256 tableId, uint256 amount)
 
-Caller menarik `pendingWithdrawals[caller]`. Fee developer bersifat kumulatif; developer tidak perlu withdraw satu-satu per transaksi.
+Hanya fee wallet yang tercatat saat release yang boleh withdraw fee.
 
-## Deploy ke Base Mainnet
+## Status
 
-1. Buat file `.env` dari `.env.example`.
-2. Isi:
+Call:
 
-```text
-DEPLOYER_PRIVATE_KEY=0x...
-FEE_WALLET=0x...
-BASE_MAINNET_RPC_URL=https://mainnet.base.org
-ETHERSCAN_API_KEY=...
-```
+getTable(uint256 tableId)
 
-3. Pastikan deployer punya ETH di Base Mainnet.
-4. Jalankan:
+Return:
 
-```powershell
-cd C:\Users\ASUS\ai-agent-escrow-gateway
-npm run deploy:base-mainnet
-```
+seller, buyer, fundedAmount, balance, withdrawnAmount, status
 
-## Python Copy-Paste SDK
+Status enum:
+
+0 = None
+1 = Open
+2 = Released
+3 = Burned
+
+## Yang Sengaja Tidak Ada
+
+- Tidak ada amount saat create.
+- Tidak ada proof verification.
+- Tidak ada refund buyer.
+- Tidak ada arbitrase.
+- Tidak ada timeout release.
+- Tidak ada largest-funder controller.
+- Tidak ada first-funder controller.
+
+## Python SDK
 
 File:
 
-```text
 sdk/python/ai_agent_escrow.py
-```
+
+Environment:
+
+AI_ESCROW_RPC_URL=https://mainnet.base.org
+AI_ESCROW_CONTRACT_ADDRESS=0xf3C5d2C9a110057138329b14c4EB124F24830dD9
+AI_ESCROW_CHAIN_ID=8453
+AI_BUYER_PRIVATE_KEY=0x_buyer_private_key
+AI_SELLER_ADDRESS=0x_seller_wallet
+AI_ESCROW_AMOUNT_ETH=0.000001
 
 Run:
 
-```powershell
-cd C:\Users\ASUS\ai-agent-escrow-gateway\sdk\python
-python -m pip install -r requirements.txt
-$env:AI_ESCROW_RPC_URL="https://mainnet.base.org"
-$env:AI_ESCROW_CONTRACT_ADDRESS="0xc2a7524864d1998454EB6CF09242B9D33257F6Bf"
-$env:AI_ESCROW_CHAIN_ID="8453"
-$env:AI_BUYER_PRIVATE_KEY="0xbuyer_agent_private_key"
-$env:AI_SELLER_ADDRESS="0xseller_agent_wallet"
-$env:AI_ESCROW_AMOUNT_ETH="0.000001"
-python .\ai_agent_escrow.py
-```
+python sdk/python/ai_agent_escrow.py
 
-## C++ Copy-Paste Wrapper
-
-File:
-
-```text
-sdk/cpp/ai_agent_escrow.cpp
-```
-
-Run:
-
-```powershell
-cd C:\Users\ASUS\ai-agent-escrow-gateway\sdk\cpp
-g++ -std=c++17 .\ai_agent_escrow.cpp -o ai_agent_escrow.exe
-$env:AI_ESCROW_RPC_URL="https://mainnet.base.org"
-$env:AI_ESCROW_CONTRACT_ADDRESS="0xc2a7524864d1998454EB6CF09242B9D33257F6Bf"
-$env:AI_BUYER_PRIVATE_KEY="0xbuyer_agent_private_key"
-$env:AI_SELLER_ADDRESS="0xseller_agent_wallet"
-$env:AI_ESCROW_AMOUNT_WEI="1000000000000"
-.\ai_agent_escrow.exe
-```
+Default run creates a table for AI_SELLER_ADDRESS with the buyer wallet from AI_BUYER_PRIVATE_KEY. If AI_ESCROW_AMOUNT_ETH is set, it also funds the table.

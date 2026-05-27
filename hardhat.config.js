@@ -33,6 +33,10 @@ module.exports = {
     }
   },
   etherscan: {
+    // Etherscan API v2 uses one multichain key instead of per-network v1 keys.
     apiKey: ETHERSCAN_API_KEY
+  },
+  sourcify: {
+    enabled: true
   }
 };

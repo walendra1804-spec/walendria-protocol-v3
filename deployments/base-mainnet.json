@@ -2,14 +2,14 @@
   "contractName": "AIAgentEscrow",
   "network": "baseMainnet",
   "chainId": 8453,
-  "contractAddress": "0xf3C5d2C9a110057138329b14c4EB124F24830dD9",
+  "contractAddress": "0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D",
   "deployer": "0x9e25e02Cc41c07d7136B50550ea80C48b01E33e2",
   "owner": "0x9e25e02Cc41c07d7136B50550ea80C48b01E33e2",
   "feeWallet": "0x9f87Eae58dDB89281FDF794CD3Bd13D3e2457a99",
   "deadWallet": "0x000000000000000000000000000000000000dEaD",
   "feeBps": 50,
-  "deploymentTxHash": "0x461695bef7fbde8bbbf1c3cdac94b37a7f5b27018ea53c0f8487e4eef8d2d8e5",
-  "blockNumber": 46163437,
-  "explorer": "https://basescan.org/address/0xf3C5d2C9a110057138329b14c4EB124F24830dD9",
-  "deployedAt": "2026-05-18T14:57:00.065Z"
+  "deploymentTxHash": "0xe1eb3be0cccf20f5b08715ed24f3582c0f791b0d80487ab4c8bc407195811c94",
+  "blockNumber": 46241136,
+  "explorer": "https://basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D",
+  "deployedAt": "2026-05-20T10:06:58.598Z"
 }
