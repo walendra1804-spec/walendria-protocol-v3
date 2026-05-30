@@ -54,13 +54,31 @@ describe("AIAgentEscrow", function () {
   }
 
 
-  it("quotes an absolute zero protocol fee", async function () {
-    const { escrow } = await deployFixture();
+  it("starts at zero protocol fee and lets owner update fee up to 1%", async function () {
+    const { escrow, owner, stranger } = await deployFixture();
 
-    expect(await escrow.FEE_BPS()).to.equal(0n);
-    const quote = await escrow.quoteFee(123456789n);
+    expect(await escrow.MAX_FEE_BPS()).to.equal(100n);
+    expect(await escrow.feeBps()).to.equal(0n);
+    let quote = await escrow.quoteFee(123456789n);
     expect(quote.feeAmount).to.equal(0n);
     expect(quote.sellerAmount).to.equal(123456789n);
+
+    await expect(escrow.connect(stranger).updateFeeBps(1, ZERO_GAS))
+      .to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+    await expect(escrow.connect(owner).updateFeeBps(101, ZERO_GAS))
+      .to.be.revertedWithCustomError(escrow, "FeeTooHigh")
+      .withArgs(101, 100);
+
+    await expect(escrow.connect(owner).updateFeeBps(100, ZERO_GAS))
+      .to.emit(escrow, "FeeBpsUpdated")
+      .withArgs(0, 100);
+    expect(await escrow.feeBps()).to.equal(100n);
+    quote = await escrow.quoteFee(10_000n);
+    expect(quote.feeAmount).to.equal(100n);
+    expect(quote.sellerAmount).to.equal(9_900n);
+
+    await (await escrow.connect(owner).updateFeeBps(0, ZERO_GAS)).wait();
+    expect(await escrow.feeBps()).to.equal(0n);
   });
 
   it("creates an empty asset-agnostic table with fixed seller and buyer", async function () {
@@ -202,6 +220,29 @@ describe("AIAgentEscrow", function () {
 
     expect(await ethers.provider.getBalance(await seller.getAddress())).to.equal(sellerBefore + sellerAmount);
     expect(await ethers.provider.getBalance(await feeWallet.getAddress())).to.equal(feeBefore);
+    expect(await escrow.totalAccountedByAsset(ZERO)).to.equal(0n);
+  });
+
+  it("can charge a mutable release fee up to the 1% cap", async function () {
+    const { escrow, owner, buyer, seller, feeWallet } = await deployFixture();
+    await (await escrow.connect(owner).updateFeeBps(100, ZERO_GAS)).wait();
+    const tableId = await createAndFund(escrow, buyer, seller);
+    const sellerBefore = await ethers.provider.getBalance(await seller.getAddress());
+    const feeBefore = await ethers.provider.getBalance(await feeWallet.getAddress());
+
+    await (await escrow.connect(buyer).release(tableId, ZERO_GAS)).wait();
+
+    const fee = FIRST_FUND / 100n;
+    const sellerAmount = FIRST_FUND - fee;
+    const nativeAsset = await escrow.getAssetBalance(tableId, ZERO);
+    expect(nativeAsset.sellerAmount).to.equal(sellerAmount);
+    expect(nativeAsset.feeAmount).to.equal(fee);
+
+    await (await escrow.connect(seller).withdraw(tableId, ZERO, sellerAmount, ZERO_GAS)).wait();
+    await (await escrow.connect(feeWallet).withdrawFees(tableId, ZERO, fee, ZERO_GAS)).wait();
+
+    expect(await ethers.provider.getBalance(await seller.getAddress())).to.equal(sellerBefore + sellerAmount);
+    expect(await ethers.provider.getBalance(await feeWallet.getAddress())).to.equal(feeBefore + fee);
     expect(await escrow.totalAccountedByAsset(ZERO)).to.equal(0n);
   });
 

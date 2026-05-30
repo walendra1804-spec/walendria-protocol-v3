@@ -9,7 +9,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 contract AIAgentEscrow is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    uint16 public constant FEE_BPS = 0;
+    uint16 public constant MAX_FEE_BPS = 100;
     uint16 public constant BPS_DENOMINATOR = 10_000;
     address public constant NATIVE_TOKEN = address(0);
 
@@ -38,6 +38,7 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
     }
 
     uint256 public nextEscrowId;
+    uint16 public feeBps;
     address public feeWallet;
     address public immutable deadWallet;
 
@@ -54,6 +55,7 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
     event AssetBurned(uint256 indexed tableId, address indexed token, address deadWallet, uint256 amount);
     event SellerWithdrawal(uint256 indexed tableId, address indexed seller, address indexed token, uint256 amount, uint256 remainingAmount);
     event FeeWithdrawal(uint256 indexed tableId, address indexed feeWallet, address indexed token, uint256 amount, uint256 remainingAmount);
+    event FeeBpsUpdated(uint16 oldFeeBps, uint16 newFeeBps);
     event FeeWalletUpdated(address indexed oldFeeWallet, address indexed newFeeWallet);
     event OwnerSurplusNativeRescue(address indexed to, uint256 amount);
     event OwnerSurplusTokenRescue(address indexed token, address indexed to, uint256 amount);
@@ -68,6 +70,7 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
     error NoFunds();
     error InsufficientWithdrawable(uint256 availableAmount);
     error InsufficientSurplus(uint256 availableSurplus);
+    error FeeTooHigh(uint16 feeBps, uint16 maxFeeBps);
     error TimeoutDisabled();
     error NativeTransferFailed(address recipient, uint256 amount);
 
@@ -224,6 +227,17 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
         emit FeeWalletUpdated(oldFeeWallet, newFeeWallet);
     }
 
+    function updateFeeBps(uint16 newFeeBps) external onlyOwner {
+        if (newFeeBps > MAX_FEE_BPS) {
+            revert FeeTooHigh(newFeeBps, MAX_FEE_BPS);
+        }
+
+        uint16 oldFeeBps = feeBps;
+        feeBps = newFeeBps;
+
+        emit FeeBpsUpdated(oldFeeBps, newFeeBps);
+    }
+
     function ownerRescueSurplusNative(address payable to, uint256 amount) external onlyOwner nonReentrant {
         if (to == address(0)) {
             revert ZeroAddress();
@@ -331,8 +345,8 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
         );
     }
 
-    function quoteFee(uint256 amount) public pure returns (uint256 feeAmount, uint256 sellerAmount) {
-        feeAmount = (amount * FEE_BPS) / BPS_DENOMINATOR;
+    function quoteFee(uint256 amount) public view returns (uint256 feeAmount, uint256 sellerAmount) {
+        feeAmount = (amount * feeBps) / BPS_DENOMINATOR;
         sellerAmount = amount - feeAmount;
     }
 
