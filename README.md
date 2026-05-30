@@ -16,26 +16,24 @@ This is a base protocol, not a consumer arbitration product. It does not verify 
 
 ## Mainnet Deployment
 
-Zero-fee source status: this repository now compiles with `FEE_BPS = 0`. Existing on-chain deployments cannot be mutated; redeploy from this source before advertising a live Base address as absolute-zero-fee.
-
 Network: Base Mainnet
 
-Contract:
+Current preferred contract:
 
 ```text
-0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
+0xAa1Ebd8604A209970A5DFa4dF259352D58980120
 ```
 
 Verified source:
 
 ```text
-https://basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D#code
+https://basescan.org/address/0xAa1Ebd8604A209970A5DFa4dF259352D58980120#code
 ```
 
 Deployment transaction:
 
 ```text
-0xe1eb3be0cccf20f5b08715ed24f3582c0f791b0d80487ab4c8bc407195811c94
+0x156518cc84fe6fdf3582e10506009fecc01b1109e9fbf4d608694718a59e5aca
 ```
 
 Fee wallet:
@@ -44,14 +42,14 @@ Fee wallet:
 0x9f87Eae58dDB89281FDF794CD3Bd13D3e2457a99
 ```
 
-Platform fee: `0%` on `release`. `claimTimeout` is disabled and intentionally reverts.
+Platform fee: starts at `0%` on `release`; owner-adjustable but capped by `MAX_FEE_BPS = 100` (1%). `claimTimeout` is disabled and intentionally reverts.
 
 ## Testnet Deployment
 
 Base Sepolia remains available for integration tests:
 
 ```text
-https://sepolia.basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
+https://sepolia.basescan.org/address/0xc2a7524864d1998454EB6CF09242B9D33257F6Bf
 ```
 
 ## Core Contract Flow
@@ -73,6 +71,41 @@ Settlement uses per-table pull-payment accounting:
 - there is no protocol-fee withdrawal in normal zero-fee operation.
 
 Funds are not pushed during release; withdrawal is explicit and partial per table.
+
+## Public CLI Quick Start
+
+Landing page / installer:
+
+```text
+https://page-outlets-outcomes-recommends.trycloudflare.com/
+```
+
+Install:
+
+```bash
+curl -fsSL https://page-outlets-outcomes-recommends.trycloudflare.com/install.sh | sh
+```
+
+Use a hot-wallet key for actions that write to Base. `WP_YES=1` is useful for AI agents and scripts that cannot answer interactive prompts.
+
+```bash
+export WP_PRIVATE_KEY=0xYOUR_HOT_WALLET_PRIVATE_KEY
+export WP_YES=1
+
+wp 0xSELLER 0xBUYER
+wp 0xCONTRACT:42
+wp 0xCONTRACT:42 +0.05:ETH
+wp 0xCONTRACT:42 release
+wp 0xCONTRACT:42 -0.05:ETH
+```
+
+A live CLI demo table exists at:
+
+```text
+0xAa1Ebd8604A209970A5DFa4dF259352D58980120:1
+```
+
+It demonstrates create -> fund -> release -> withdraw on Base mainnet. See `docs/LIVE_CLI_DEMO.md`.
 
 ## Quick Start
 
@@ -147,7 +180,7 @@ Set environment variables for Base Mainnet:
 
 ```bash
 set AI_ESCROW_RPC_URL=https://mainnet.base.org
-set AI_ESCROW_CONTRACT_ADDRESS=0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
+set AI_ESCROW_CONTRACT_ADDRESS=0xAa1Ebd8604A209970A5DFa4dF259352D58980120
 set AI_BUYER_PRIVATE_KEY=0x_buyer_agent_private_key
 set AI_SELLER_ADDRESS=0x_seller_agent_wallet
 set AI_ESCROW_CHAIN_ID=8453
@@ -188,6 +221,7 @@ print(client.withdraw())
 ## Repository Layout
 
 ```text
+cli/wp                     Public WP CLI source used by the landing installer
 contracts/                 Solidity contracts
 contracts/test/            test helper contracts
 deployments/               public deployment metadata
@@ -217,5 +251,5 @@ npm run hh -- verify --network baseMainnet ^
 - Private keys must never be committed. Use local env files only.
 - ERC20 funding must use approval + `fundToken`; direct token transfers are unaccounted surplus.
 - `claimTimeout` is disabled. Silent buyers do not auto-release funds.
-- Protocol fee is absolute zero in this source (`FEE_BPS = 0`); fee withdrawals remain ABI-compatible but normally have no balance.
+- Current preferred deployment starts at 0% fee, but `feeBps` is owner-adjustable and capped at 1% (`MAX_FEE_BPS = 100`). Fee withdrawals remain ABI-compatible and normally have no balance while fee is 0.
 - The contract is verified on Base Mainnet. Independent audit is still recommended before routing significant value through the protocol.

@@ -3,12 +3,12 @@
 Formerly Meridian Protocol.
 
 Network: Base Mainnet
-Contract: `0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D`
-Explorer: https://basescan.org/address/0x0c60Cc8f75Bf2FFC5fF197b7897692603428d59D
-Fee: 0% on release
+Contract: `0xAa1Ebd8604A209970A5DFa4dF259352D58980120`
+Explorer: https://basescan.org/address/0xAa1Ebd8604A209970A5DFa4dF259352D58980120
+Fee: starts at 0% on release, owner-adjustable and capped at 1%
 Dead wallet: `0x000000000000000000000000000000000000dEaD`
 
-Note: zero fee applies to this source (`FEE_BPS = 0`) and any redeploy from it. Existing on-chain deployments cannot be mutated.
+Note: the current preferred V3 deployment starts with `feeBps = 0`. The owner can update `feeBps`, but the contract caps it at `MAX_FEE_BPS = 100` (1%).
 
 ## Mental Model
 
@@ -95,7 +95,7 @@ Only the fixed seller can call after release. Supports partial withdrawal per ta
 function withdrawFees(uint256 tableId, address token, uint256 amount) external
 ```
 
-Only the release-time fee wallet can call after release. With the zero-fee source (`FEE_BPS = 0`), no normal fee balance accrues; this function remains for ABI compatibility.
+Only the release-time fee wallet can call after release. While `feeBps` is 0, no normal fee balance accrues; this function remains for ABI compatibility if fees are later set within the 1% cap.
 
 ### getTable
 
@@ -139,10 +139,10 @@ Reads per-table/per-asset accounting.
 ### quoteFee
 
 ```solidity
-function quoteFee(uint256 amount) public pure returns (uint256 feeAmount, uint256 sellerAmount)
+function quoteFee(uint256 amount) public view returns (uint256 feeAmount, uint256 sellerAmount)
 ```
 
-Returns `0` fee and seller amount equal to the full input amount.
+Returns the current fee/seller split using live `feeBps`. On the preferred deployment this currently returns 0 fee while `feeBps` remains 0.
 
 ## Example Flow
 
@@ -151,4 +151,4 @@ Returns `0` fee and seller amount equal to the full input amount.
 3. ERC20: buyer approves WP contract, then calls `fundToken(tableId, token, amount)`.
 4. Buyer chooses `release(tableId)` or `burn(tableId)`.
 5. If released, seller calls `withdraw(tableId, token, amount)`.
-6. Fee wallet calls `withdrawFees(tableId, token, amount)`.
+6. If feeBps was nonzero at release, fee wallet calls `withdrawFees(tableId, token, amount)`.

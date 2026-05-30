@@ -1,0 +1,327 @@
+#!/usr/bin/env node
+'use strict';
+
+const { execFileSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const DEFAULT_RPC = process.env.WP_RPC_URL || 'https://mainnet.base.org';
+const DEFAULT_CONTRACT = process.env.WP_CONTRACT_ADDRESS || '0xAa1Ebd8604A209970A5DFa4dF259352D58980120';
+const CHAIN_ID = Number(process.env.WP_CHAIN_ID || 8453);
+const NATIVE = 'ETH';
+const TOKEN_ALIASES = {
+  ETH: 'ETH',
+  BASEETH: 'ETH',
+  USDC: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  USDT: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+  DAI:  '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb'
+};
+
+const WP_ABI = [
+  'event TableCreated(uint256 indexed tableId,address indexed seller,address indexed buyer)',
+  'function createTable(address seller,address buyer) returns (uint256)',
+  'function createEscrow(address seller,address buyer) returns (uint256)',
+  'function getTable(uint256 id) view returns (address seller,address buyer,uint256 fundedAmount,uint256 balance,uint256 withdrawnAmount,uint8 state)',
+  'function getTableAssets(uint256 id) view returns (address[])',
+  'function getAssetBalance(uint256 id,address asset) view returns (uint256 fundedAmount,uint256 balance,uint256 sellerAmount,uint256 feeAmount,uint256 withdrawnAmount,uint256 feeWithdrawnAmount,uint256 burnedAmount)',
+  'function getHistoryLength(uint256 id) view returns (uint256)',
+  'function getHistoryEntry(uint256 id,uint256 index) view returns (tuple(uint8 action,address actor,address token,uint256 amount,uint256 timestamp,uint256 blockNumber))',
+  'function fund(uint256 id) payable',
+  'function fundToken(uint256 id,address token,uint256 amount)',
+  'function release(uint256 id)',
+  'function burn(uint256 id)',
+  'function dispute(uint256 id)',
+  'function withdraw(uint256 id,address token,uint256 amount)',
+  'function quoteFee(uint256 amount) view returns (uint256 sellerAmount,uint256 feeAmount)',
+  'function NATIVE_TOKEN() view returns (address)',
+  'function feeWallet() view returns (address)',
+  'function deadWallet() view returns (address)'
+];
+const ERC20_ABI = [
+  'function approve(address spender,uint256 amount) returns (bool)',
+  'function allowance(address owner,address spender) view returns (uint256)',
+  'function decimals() view returns (uint8)',
+  'function symbol() view returns (string)',
+  'function balanceOf(address owner) view returns (uint256)'
+];
+
+function die(msg, code=1) { console.error(msg); process.exit(code); }
+function isAddress(x) { return /^0x[a-fA-F0-9]{40}$/.test(x || ''); }
+function isPrivateKey(x) { return /^0x[a-fA-F0-9]{64}$/.test(x || ''); }
+function isTable(x) { return /^0x[a-fA-F0-9]{40}:[0-9]+$/.test(x || ''); }
+function splitTable(x) { const [contract, id] = x.split(':'); return { contract, id: BigInt(id) }; }
+function shortHash(h) { return h ? `${h.slice(0,10)}…${h.slice(-8)}` : ''; }
+
+function usage() {
+  console.log(`Walendria Protocol (WP) live CLI for Base mainnet
+
+Environment:
+  WP_RPC_URL              Base RPC URL (default: ${DEFAULT_RPC})
+  WP_CONTRACT_ADDRESS     default contract for create (default: ${DEFAULT_CONTRACT})
+  WP_PRIVATE_KEY          signer key; safer than putting a key in shell history
+  WP_YES=1                skip confirmation prompts for transactions
+
+Commands:
+  # One-time shell setup for this terminal session.
+  export WP_PRIVATE_KEY=0xYOUR_HOT_WALLET_PRIVATE_KEY
+
+  # Optional for AI agents / scripts: skip interactive YES prompts.
+  export WP_YES=1
+
+  # Create table on default/live WP contract.
+  wp 0xSELLER 0xBUYER
+
+  # Read table state on-chain. No private key needed.
+  wp 0xCONTRACT:42
+
+  # Fund with native ETH from buyer/controller key.
+  wp 0xCONTRACT:42 +0.05:ETH
+
+  # Fund with ERC20. CLI checks allowance, approves if needed, then funds.
+  wp 0xCONTRACT:42 +26:USDC
+  wp 0xCONTRACT:42 +100:0xTOKEN_ADDRESS
+
+  # Buyer/controller final actions.
+  wp 0xCONTRACT:42 release
+  wp 0xCONTRACT:42 burn
+
+  # Seller withdraws after release.
+  wp 0xCONTRACT:42 -0.05:ETH
+  wp 0xCONTRACT:42 -26:USDC
+
+Notes:
+  This is a real on-chain CLI. It sends Base transactions when a signer is provided.
+  Never use production private keys on a machine you do not trust.`);
+}
+
+function ensureEthers() {
+  try { return require('ethers'); } catch (_) {}
+  const dir = path.join(os.homedir(), '.wp-cli');
+  fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(path.join(dir, 'package.json'))) {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ private: true, dependencies: { ethers: '^6.15.0' } }, null, 2));
+  }
+  console.error('Installing WP dependency ethers into ~/.wp-cli (first run only)...');
+  execFileSync('npm', ['install', '--omit=dev', '--silent'], { cwd: dir, stdio: 'inherit' });
+  return require(path.join(dir, 'node_modules', 'ethers'));
+}
+
+function parseSignerAndAction(args) {
+  if (args.length === 2) return { key: process.env.WP_PRIVATE_KEY, action: args[1] };
+  if (args.length === 3) return { key: args[1], action: args[2] };
+  die('Bad command shape. Run: wp');
+}
+
+function parseAmountToken(action) {
+  const m = /^([+-])([^:]+):(.+)$/.exec(action || '');
+  if (!m) die('Amount must include token, e.g. +0.05:ETH or -26:USDC');
+  const [, sign, amount, tokenRaw] = m;
+  const tokenKey = tokenRaw.toUpperCase();
+  const token = TOKEN_ALIASES[tokenKey] || tokenRaw;
+  if (token !== NATIVE && !isAddress(token)) die(`Unknown token ${tokenRaw}. Use ETH, USDC, USDT, DAI, or a 0x token address.`);
+  return { sign, amount, tokenRaw, token };
+}
+
+const HISTORY_ACTIONS = ['None', 'Created', 'Funded', 'Released', 'Burned', 'SellerWithdrawal', 'FeeWithdrawal'];
+
+function formatUnix(ts) {
+  const n = Number(ts || 0n);
+  if (!n) return '0';
+  return new Date(n * 1000).toISOString();
+}
+
+async function tokenLabel(ethers, provider, asset) {
+  if (asset === ethers.ZeroAddress) return 'ETH';
+  try { return `${await new ethers.Contract(asset, ERC20_ABI, provider).symbol()} (${asset})`; } catch (_) { return asset; }
+}
+
+async function confirmTx(label, details) {
+  console.error(`\nAbout to send transaction: ${label}`);
+  for (const [k,v] of Object.entries(details)) console.error(`  ${k}: ${v}`);
+  if (process.env.WP_YES === '1') return;
+  if (!process.stdin.isTTY) die('Refusing to send tx without interactive confirmation. Set WP_YES=1 to confirm non-interactively.');
+  process.stderr.write('Type YES to continue: ');
+  const answer = fs.readFileSync(0, 'utf8').trim();
+  if (answer !== 'YES') die('Cancelled.', 2);
+}
+
+async function main() {
+  const args = process.argv.slice(2).filter(Boolean);
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') { usage(); return; }
+  const ethers = ensureEthers();
+  const provider = new ethers.JsonRpcProvider(DEFAULT_RPC, CHAIN_ID);
+
+  if (args.length === 2 && isTable(args[0]) && args[1] === 'history') {
+    const { contract, id } = splitTable(args[0]);
+    const wp = new ethers.Contract(contract, WP_ABI, provider);
+    let length;
+    try {
+      length = await wp.getHistoryLength(id);
+    } catch (err) {
+      die(`This contract does not expose WP on-chain history. Deploy/use a history-enabled WP contract. (${err.shortMessage || err.message})`);
+    }
+    console.log('WP table transaction history (on-chain)');
+    console.log(`chain_id: ${CHAIN_ID}`);
+    console.log(`contract: ${contract}`);
+    console.log(`table_id: ${id.toString()}`);
+    console.log(`entries: ${length.toString()}`);
+    for (let i = 0n; i < length; i++) {
+      const h = await wp.getHistoryEntry(id, i);
+      const action = HISTORY_ACTIONS[Number(h.action)] || String(h.action);
+      const token = await tokenLabel(ethers, provider, h.token);
+      console.log(`- #${i.toString()} ${action}`);
+      console.log(`  actor: ${h.actor}`);
+      console.log(`  token: ${token}`);
+      console.log(`  amount_raw: ${h.amount}`);
+      console.log(`  timestamp: ${h.timestamp} (${formatUnix(h.timestamp)})`);
+      console.log(`  block: ${h.blockNumber}`);
+    }
+    return;
+  }
+
+  if (args.length === 1 && isTable(args[0])) {
+    const { contract, id } = splitTable(args[0]);
+    const wp = new ethers.Contract(contract, WP_ABI, provider);
+    const [table, assets, feeWallet, deadWallet] = await Promise.all([
+      wp.getTable(id), wp.getTableAssets(id), wp.feeWallet().catch(()=>null), wp.deadWallet().catch(()=>null)
+    ]);
+    const states = ['None','Open','Released','Burned','Unknown'];
+    console.log('WP table state (on-chain)');
+    console.log(`chain_id: ${CHAIN_ID}`);
+    console.log(`contract: ${contract}`);
+    console.log(`table_id: ${id.toString()}`);
+    console.log(`seller: ${table.seller}`);
+    console.log(`buyer/controller: ${table.buyer}`);
+    console.log(`state: ${states[Number(table.state)] || String(table.state)} (${table.state})`);
+    console.log(`funded_amount_raw: ${table.fundedAmount}`);
+    console.log(`balance_raw: ${table.balance}`);
+    console.log(`withdrawn_amount_raw: ${table.withdrawnAmount}`);
+    if (feeWallet) console.log(`fee_wallet: ${feeWallet}`);
+    if (deadWallet) console.log(`dead_wallet: ${deadWallet}`);
+    if (!assets.length) { console.log('assets: none'); return; }
+    console.log('assets:');
+    for (const asset of assets) {
+      const b = await wp.getAssetBalance(id, asset);
+      let label = asset;
+      if (asset === ethers.ZeroAddress) label = 'ETH';
+      else {
+        try { label = `${await new ethers.Contract(asset, ERC20_ABI, provider).symbol()} (${asset})`; } catch (_) {}
+      }
+      console.log(`- ${label}`);
+      console.log(`  funded_amount_raw: ${b.fundedAmount}`);
+      console.log(`  balance_raw: ${b.balance}`);
+      console.log(`  seller_amount_raw: ${b.sellerAmount}`);
+      console.log(`  fee_amount_raw: ${b.feeAmount}`);
+      console.log(`  withdrawn_amount_raw: ${b.withdrawnAmount}`);
+      console.log(`  fee_withdrawn_amount_raw: ${b.feeWithdrawnAmount}`);
+      console.log(`  burned_amount_raw: ${b.burnedAmount}`);
+    }
+    return;
+  }
+
+  if ((args.length === 2 || args.length === 3) && isAddress(args[0]) && isAddress(args[1])) {
+    const key = args.length === 3 ? args[2] : process.env.WP_PRIVATE_KEY;
+    if (!isPrivateKey(key)) die('Creating a live table needs a 0x-prefixed 64-hex private key, or set WP_PRIVATE_KEY and omit the key argument.');
+    const wallet = new ethers.Wallet(key, provider);
+    const wp = new ethers.Contract(DEFAULT_CONTRACT, WP_ABI, wallet);
+    await confirmTx('createTable', { contract: DEFAULT_CONTRACT, signer: wallet.address, seller: args[0], buyer: args[1] });
+    const tx = await wp.createTable(args[0], args[1]);
+    console.log(`tx: ${tx.hash}`);
+    const rc = await tx.wait();
+    console.log(`confirmed_block: ${rc.blockNumber}`);
+    console.log(`status: ${rc.status === 1 ? 'success' : 'failed'}`);
+    for (const log of rc.logs) {
+      try {
+        const parsed = wp.interface.parseLog(log);
+        if (parsed && parsed.name === 'TableCreated') {
+          console.log(`table_id: ${parsed.args.tableId}`);
+          console.log(`table: ${DEFAULT_CONTRACT}:${parsed.args.tableId}`);
+        }
+      } catch (_) {}
+    }
+    return;
+  }
+
+  if (args.length >= 2 && isTable(args[0])) {
+    const { contract, id } = splitTable(args[0]);
+    const { key, action } = parseSignerAndAction(args);
+    if (!isPrivateKey(key)) die('Transaction needs a 0x-prefixed 64-hex private key, or set WP_PRIVATE_KEY and omit the key argument.');
+    const wallet = new ethers.Wallet(key, provider);
+    const wp = new ethers.Contract(contract, WP_ABI, wallet);
+
+    if (action === 'release' || action === 'burn' || action === 'dispute') {
+      await confirmTx(action, { contract, table_id: id.toString(), signer: wallet.address });
+      const tx = await wp[action](id);
+      console.log(`tx: ${tx.hash}`);
+      const rc = await tx.wait();
+      console.log(`confirmed_block: ${rc.blockNumber}`);
+      console.log(`status: ${rc.status === 1 ? 'success' : 'failed'}`);
+      return;
+    }
+
+    if (/^[+-]/.test(action)) {
+      const { sign, amount, tokenRaw, token } = parseAmountToken(action);
+      if (sign === '+') {
+        if (token === NATIVE) {
+          const value = ethers.parseEther(amount);
+          await confirmTx('fund ETH', { contract, table_id: id.toString(), signer: wallet.address, amount: `${amount} ETH` });
+          const tx = await wp.fund(id, { value });
+          console.log(`tx: ${tx.hash}`);
+          const rc = await tx.wait();
+          console.log(`confirmed_block: ${rc.blockNumber}`);
+          console.log(`status: ${rc.status === 1 ? 'success' : 'failed'}`);
+          return;
+        }
+        const erc20 = new ethers.Contract(token, ERC20_ABI, wallet);
+        const decimals = await erc20.decimals();
+        const symbol = await erc20.symbol().catch(()=>tokenRaw);
+        const raw = ethers.parseUnits(amount, Number(decimals));
+        const allowance = await erc20.allowance(wallet.address, contract);
+        if (allowance < raw) {
+          await confirmTx('approve ERC20', { token: `${symbol} ${token}`, spender: contract, signer: wallet.address, amount: `${amount} ${symbol}` });
+          const approveTx = await erc20.approve(contract, raw);
+          console.log(`approve_tx: ${approveTx.hash}`);
+          const approveRc = await approveTx.wait();
+          console.log(`approve_status: ${approveRc.status === 1 ? 'success' : 'failed'}`);
+          if (approveRc.status !== 1) die('Approval failed.');
+        }
+        await confirmTx('fund ERC20', { contract, table_id: id.toString(), signer: wallet.address, token: `${symbol} ${token}`, amount: `${amount} ${symbol}` });
+        const tx = await wp.fundToken(id, token, raw);
+        console.log(`tx: ${tx.hash}`);
+        const rc = await tx.wait();
+        console.log(`confirmed_block: ${rc.blockNumber}`);
+        console.log(`status: ${rc.status === 1 ? 'success' : 'failed'}`);
+        return;
+      }
+
+      // withdraw
+      let withdrawToken = token;
+      let raw;
+      if (token === NATIVE) {
+        try { withdrawToken = await wp.NATIVE_TOKEN(); } catch (_) { withdrawToken = ethers.ZeroAddress; }
+        raw = ethers.parseEther(amount);
+      } else {
+        const erc20 = new ethers.Contract(token, ERC20_ABI, provider);
+        raw = ethers.parseUnits(amount, Number(await erc20.decimals()));
+      }
+      await confirmTx('withdraw', { contract, table_id: id.toString(), signer: wallet.address, token: tokenRaw, amount });
+      const tx = await wp.withdraw(id, withdrawToken, raw);
+      console.log(`tx: ${tx.hash}`);
+      const rc = await tx.wait();
+      console.log(`confirmed_block: ${rc.blockNumber}`);
+      console.log(`status: ${rc.status === 1 ? 'success' : 'failed'}`);
+      return;
+    }
+  }
+
+  usage();
+  process.exit(1);
+}
+
+main().catch(err => {
+  const reason = err && (err.shortMessage || err.reason || err.message) || String(err);
+  console.error(`WP error: ${reason}`);
+  if (err && err.transactionHash) console.error(`tx: ${err.transactionHash}`);
+  process.exit(1);
+});
