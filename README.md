@@ -15,6 +15,32 @@ The protocol uses a deliberately hard settlement rule:
 
 This is a base protocol, not a consumer arbitration product. It does not verify proof, judge work, refund buyers, or resolve disputes. It only enforces the release-or-burn table rules committed on-chain.
 
+## Notes from Creator
+
+### Original Indonesian note
+
+> model transaksi jarak jauh yang lama adalah model yang bagus namun ada 1 masalah yaitu bahwa penengah(penahan dana) adalah manusia, yang bisa kolusi, bisa menipu, dan subjektif. kini masalah itu hilang semenjak kita memakai protokol ini untuk transaksi jarak jauh, penengah bukan lagi manusia, melainkan fungsi logika yang konsisten, dan tentunya tidak bisa disuap.
+>
+> secara desain game theory, protokol ini berhasil membuktikan bahwa ia menghilangkan seluruh potensi masalah dalam model transaksi jarak jauh dengan cara menghapus keuntungan apapun bagi pihak yang licik
+>
+> perlu diingat, protokol ini tidak dapat mencegah pihak irasional(yang tidak punya otak untuk menghitung apakah biaya resiko < potensi keuntungan atau tidak nya) serta pihak yang salah memutuskan sesuatu(beda dari niat)
+>
+> protokol ini adalah smart contract yang dideploy sekali (singleton). setiap transaksi baru hanya membuat 'table' baru di dalamnya, bukan kontrak baru. Ini membuat gas fee tetap rendah.
+>
+> untuk lengkapnya, bisa di cek ke walendria-protocol-v3/docs/whitepaper/
+
+### English translation
+
+The old long-distance transaction model was a good model, but it had one problem: the intermediary, the party holding the funds, was human. A human intermediary can collude, deceive, and act subjectively. That problem disappears when we use this protocol for long-distance transactions. The intermediary is no longer a human; it is a consistent logic function, and of course it cannot be bribed.
+
+From a game-theory design perspective, this protocol proves that it removes the potential problems in the long-distance transaction model by removing any possible advantage for a dishonest party.
+
+It should be remembered that this protocol cannot prevent irrational parties, meaning parties that do not think through whether the cost of risk is lower than the potential gain, nor can it prevent parties from making the wrong decision by mistake, which is different from malicious intent.
+
+This protocol is a smart contract deployed once as a singleton. Every new transaction only creates a new “table” inside it, not a new contract. This keeps gas fees low.
+
+For the full explanation, see `walendria-protocol-v3/docs/whitepaper/`.
+
 ## Whitepaper
 
 The project includes two whitepaper versions under `docs/whitepaper/`:
