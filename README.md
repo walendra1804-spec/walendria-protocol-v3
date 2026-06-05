@@ -54,11 +54,19 @@ Platform fee: starts at `0%` on `release`; owner-adjustable but capped by `MAX_F
 
 ## Testnet Deployment
 
-Base Sepolia remains available for integration tests:
+Base Sepolia latest pure-protocol test deployment:
 
 ```text
-https://sepolia.basescan.org/address/0xc2a7524864d1998454EB6CF09242B9D33257F6Bf
+0xb6E0304622C966b888C91D098a9d45c9A1847098
 ```
+
+Explorer:
+
+```text
+https://sepolia.basescan.org/address/0xb6E0304622C966b888C91D098a9d45c9A1847098
+```
+
+This deployment was used for direct buyer/seller adversarial testing with the current V3 ABI: create table, fund, release, burn, timelock claim, and seller withdraw. It is a testnet deployment only.
 
 ## Core Contract Flow
 
