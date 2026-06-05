@@ -40,8 +40,14 @@ describe("AIAgentEscrow", function () {
     return { escrow, owner, buyer, seller, feeWallet, stranger, newFeeWallet, usdc, dai };
   }
 
-  async function createTable(escrow, seller, buyer) {
-    const tx = await escrow.connect(buyer).createTable(await seller.getAddress(), await buyer.getAddress(), ZERO_GAS);
+  async function futureReleaseTime(seconds = 3600) {
+    const block = await ethers.provider.getBlock("latest");
+    return BigInt(block.timestamp + seconds);
+  }
+
+  async function createTable(escrow, seller, buyer, seconds = 3600) {
+    const releaseTime = await futureReleaseTime(seconds);
+    const tx = await escrow.connect(buyer).createTable(await seller.getAddress(), await buyer.getAddress(), releaseTime, ZERO_GAS);
     const receipt = await tx.wait();
     const event = await parseEvent(escrow, receipt, "TableCreated");
     return event.args.tableId;
@@ -106,7 +112,8 @@ describe("AIAgentEscrow", function () {
   it("keeps createEscrow as a no-value createTable alias", async function () {
     const { escrow, buyer, seller } = await deployFixture();
 
-    const tx = await escrow.connect(buyer).createEscrow(await seller.getAddress(), await buyer.getAddress(), ZERO_GAS);
+    const releaseTime = await futureReleaseTime();
+    const tx = await escrow.connect(buyer).createEscrow(await seller.getAddress(), await buyer.getAddress(), releaseTime, ZERO_GAS);
     const receipt = await tx.wait();
     const event = await parseEvent(escrow, receipt, "TableCreated");
 
@@ -303,17 +310,42 @@ describe("AIAgentEscrow", function () {
     expect(details.status).to.equal(3n);
   });
 
-  it("does not expose any timeout release path", async function () {
+  it("requires every table to be created with an immutable future timelock that anyone can claim after expiry", async function () {
     const { escrow, buyer, seller, stranger } = await deployFixture();
-    const tableId = await createAndFund(escrow, buyer, seller);
+    const releaseTime = await futureReleaseTime(3600);
 
-    await network.provider.send("evm_increaseTime", [365 * 24 * 60 * 60]);
+    await expect(escrow.connect(buyer).createTable(await seller.getAddress(), await buyer.getAddress(), 0, ZERO_GAS))
+      .to.be.revertedWithCustomError(escrow, "InvalidTimeLock");
+
+    const tx = await escrow
+      .connect(buyer)
+      .createTable(await seller.getAddress(), await buyer.getAddress(), releaseTime, ZERO_GAS);
+    const receipt = await tx.wait();
+    const event = await parseEvent(escrow, receipt, "TableCreated");
+    const tableId = event.args.tableId;
+    expect(event.args.autoReleaseTime).to.equal(releaseTime);
+
+    const lock = await escrow.getTimeLock(tableId);
+    expect(lock.creator).to.equal(await buyer.getAddress());
+    expect(lock.releaseTime).to.equal(releaseTime);
+    expect(lock.enabled).to.equal(true);
+
+    await (await escrow.connect(buyer).fund(tableId, { value: FIRST_FUND, ...ZERO_GAS })).wait();
+    await expect(escrow.connect(stranger).claimTimeLockRelease(tableId, ZERO_GAS))
+      .to.be.revertedWithCustomError(escrow, "TimeLockNotReached");
+
+    const latest = await ethers.provider.getBlock("latest");
+    await network.provider.send("evm_increaseTime", [Number(releaseTime) - latest.timestamp + 1]);
     await network.provider.send("evm_mine");
 
-    await expect(escrow.connect(stranger).claimTimeout(tableId, ZERO_GAS))
-      .to.be.revertedWithCustomError(escrow, "TimeoutDisabled");
+    await expect(escrow.connect(stranger).claimTimeLockRelease(tableId, ZERO_GAS))
+      .to.emit(escrow, "TableAutoReleased")
+      .withArgs(tableId, await stranger.getAddress(), releaseTime);
 
-    await expect(escrow.connect(buyer).dispute(tableId, ZERO_GAS)).to.not.be.reverted;
+    const table = await escrow.getTable(tableId);
+    const nativeAsset = await escrow.getAssetBalance(tableId, ZERO);
+    expect(table.status).to.equal(2n);
+    expect(nativeAsset.sellerAmount).to.equal(FIRST_FUND);
   });
 
   it("does not block release when seller rejects native transfers", async function () {

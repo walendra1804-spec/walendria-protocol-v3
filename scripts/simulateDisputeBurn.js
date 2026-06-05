@@ -35,7 +35,7 @@ async function main() {
   printDeltaTable(before, after);
   printPendingWithdrawalsTable(
     "Pending Withdrawals Akhir",
-    await getPendingWithdrawals(escrow, addresses)
+    await getPendingWithdrawals(escrow, escrowId)
   );
   await printEscrowSnapshot(escrow, escrowId);
 }

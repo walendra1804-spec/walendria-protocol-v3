@@ -1,6 +1,6 @@
 # Walendria Protocol V3
 
-Base-layer escrow infrastructure for autonomous AI agents and digital work. Walendria Protocol V3 exposes fixed seller/buyer tables, buyer-only funding, buyer release, buyer burn/dispute, multi-asset accounting, and per-table withdrawals.
+Base-layer escrow infrastructure for autonomous AI agents and digital work. Walendria Protocol V3 exposes fixed seller/buyer tables, buyer-only funding, buyer release, mandatory immutable timelock auto-release, buyer burn/dispute, multi-asset accounting, and per-table withdrawals.
 
 ## First Principles: Release or Burn
 
@@ -8,9 +8,10 @@ The protocol uses a deliberately hard settlement rule:
 
 - Create: a table fixes one seller wallet and one buyer/controller wallet.
 - Fund: only the fixed buyer can fund the table, with any amount, after creation.
-- Release: if the buyer accepts the result, funds become withdrawable by the seller with an absolute `0%` protocol fee.
-- Burn: if the buyer rejects/disputes, the funded value is sent to the dead wallet.
-- No timeout: `claimTimeout` intentionally reverts. A silent buyer does not auto-release funds to the seller.
+- Release: if the buyer accepts the result, funds become withdrawable by the seller with an absolute `0%` starting protocol fee.
+- Timelock auto-release: every table must be created with a public future auto-release timestamp; it cannot be changed after creation. After that timestamp, anyone can call `claimTimeLockRelease(tableId)` / `claimTimeout(tableId)` to release funded assets to seller accounting.
+- Burn: if the buyer rejects/disputes before release, the funded value is sent to the dead wallet.
+- No hidden keeper: “auto-release” is enforceable on-chain but still needs any wallet/agent to submit the claim transaction after the public timestamp is reached.
 
 This is a base protocol, not a consumer arbitration product. It does not verify proof, judge work, refund buyers, or resolve disputes. It only enforces the release-or-burn table rules committed on-chain.
 
@@ -21,19 +22,19 @@ Network: Base Mainnet
 Current preferred contract:
 
 ```text
-0xAa1Ebd8604A209970A5DFa4dF259352D58980120
+0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3
 ```
 
 Verified source:
 
 ```text
-https://basescan.org/address/0xAa1Ebd8604A209970A5DFa4dF259352D58980120#code
+https://basescan.org/address/0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3#code
 ```
 
 Deployment transaction:
 
 ```text
-0x156518cc84fe6fdf3582e10506009fecc01b1109e9fbf4d608694718a59e5aca
+0x73a3a915411f8b4105ec4982f05f1223036cb2961d69209b95698c734f0bea8e
 ```
 
 Fee wallet:
@@ -42,7 +43,7 @@ Fee wallet:
 0x9f87Eae58dDB89281FDF794CD3Bd13D3e2457a99
 ```
 
-Platform fee: starts at `0%` on `release`; owner-adjustable but capped by `MAX_FEE_BPS = 100` (1%). `claimTimeout` is disabled and intentionally reverts.
+Platform fee: starts at `0%` on `release`; owner-adjustable but capped by `MAX_FEE_BPS = 100` (1%). Timelock auto-release is mandatory at creation, immutable after creation, and publicly readable.
 
 ## Testnet Deployment
 
@@ -54,12 +55,12 @@ https://sepolia.basescan.org/address/0xc2a7524864d1998454EB6CF09242B9D33257F6Bf
 
 ## Core Contract Flow
 
-- `createTable(seller, buyer)` / `createEscrow(seller, buyer)` creates an empty table with fixed seller and buyer/controller.
+- `createTable(seller, buyer, autoReleaseTime)` / `createEscrow(seller, buyer, autoReleaseTime)` creates an empty table with fixed seller, fixed buyer/controller, and a mandatory future auto-release timestamp.
 - `fund(tableId)` is payable native ETH funding and can only be called by the fixed buyer.
 - `fundToken(tableId, token, amount)` funds ERC20 assets after token approval; do not direct-transfer ERC20 tokens to the contract as normal wallet payments.
 - `release(tableId)` snapshots seller withdrawable balances and records zero protocol fee.
 - `burn(tableId)` / `dispute(tableId)` burns the table funds to `0x000000000000000000000000000000000000dEaD`.
-- `claimTimeout(tableId)` intentionally reverts; timeout release is disabled.
+- `claimTimeLockRelease(tableId)` / `claimTimeout(tableId)` can be called by anyone after the timelock timestamp to release funded assets to seller accounting.
 - `withdraw(tableId, token, amount)` lets the seller withdraw released funds per table/asset.
 - `withdrawFees(tableId, token, amount)` remains in the ABI for compatibility, but the protocol fee is zero so no fee balance accrues.
 
@@ -77,13 +78,13 @@ Funds are not pushed during release; withdrawal is explicit and partial per tabl
 Landing page / installer:
 
 ```text
-https://page-outlets-outcomes-recommends.trycloudflare.com/
+http://203.175.125.140:22054/wp
 ```
 
 Install:
 
 ```bash
-curl -fsSL https://page-outlets-outcomes-recommends.trycloudflare.com/install.sh | sh
+curl -fsSL http://203.175.125.140:22054/wpinstall.sh | sh
 ```
 
 Use a hot-wallet key for actions that write to Base. `WP_YES=1` is useful for AI agents and scripts that cannot answer interactive prompts.
@@ -92,20 +93,16 @@ Use a hot-wallet key for actions that write to Base. `WP_YES=1` is useful for AI
 export WP_PRIVATE_KEY=0xYOUR_HOT_WALLET_PRIVATE_KEY
 export WP_YES=1
 
-wp 0xSELLER 0xBUYER
+wp 0xSELLER 0xBUYER --timelock 1h
 wp 0xCONTRACT:42
+wp 0xCONTRACT:42 timelock
+wp 0xCONTRACT:42 auto-release
 wp 0xCONTRACT:42 +0.05:ETH
 wp 0xCONTRACT:42 release
 wp 0xCONTRACT:42 -0.05:ETH
 ```
 
-A live CLI demo table exists at:
-
-```text
-0xAa1Ebd8604A209970A5DFa4dF259352D58980120:1
-```
-
-It demonstrates create -> fund -> release -> withdraw on Base mainnet. See `docs/LIVE_CLI_DEMO.md`.
+No funded live demo table has been created on the current redeployment yet. See `docs/LIVE_CLI_DEMO.md` for the deployment and verification links.
 
 ## Quick Start
 
@@ -180,7 +177,7 @@ Set environment variables for Base Mainnet:
 
 ```bash
 set AI_ESCROW_RPC_URL=https://mainnet.base.org
-set AI_ESCROW_CONTRACT_ADDRESS=0xAa1Ebd8604A209970A5DFa4dF259352D58980120
+set AI_ESCROW_CONTRACT_ADDRESS=0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3
 set AI_BUYER_PRIVATE_KEY=0x_buyer_agent_private_key
 set AI_SELLER_ADDRESS=0x_seller_agent_wallet
 set AI_ESCROW_CHAIN_ID=8453
@@ -250,6 +247,6 @@ npm run hh -- verify --network baseMainnet ^
 
 - Private keys must never be committed. Use local env files only.
 - ERC20 funding must use approval + `fundToken`; direct token transfers are unaccounted surplus.
-- `claimTimeout` is disabled. Silent buyers do not auto-release funds.
+- Timelock auto-release is mandatory per table. It is fixed at creation; after expiry, any wallet can call the release claim transaction.
 - Current preferred deployment starts at 0% fee, but `feeBps` is owner-adjustable and capped at 1% (`MAX_FEE_BPS = 100`). Fee withdrawals remain ABI-compatible and normally have no balance while fee is 0.
 - The contract is verified on Base Mainnet. Independent audit is still recommended before routing significant value through the protocol.

@@ -3,13 +3,13 @@
 The public CLI source is tracked at `cli/wp` and is distributed by the landing-page installer:
 
 ```bash
-curl -fsSL https://page-outlets-outcomes-recommends.trycloudflare.com/install.sh | sh
+curl -fsSL http://203.175.125.140:22054/wpinstall.sh | sh
 ```
 
 Landing page:
 
 ```text
-https://page-outlets-outcomes-recommends.trycloudflare.com/
+http://203.175.125.140:22054/wp
 ```
 
 ## Signer setup
@@ -32,10 +32,16 @@ export WP_YES=1
 
 ```bash
 # Create table on default contract
-wp 0xSELLER 0xBUYER
+wp 0xSELLER 0xBUYER --timelock 1h
 
-# Read table state
+# Read table state and timelock
 wp 0xCONTRACT:42
+wp 0xCONTRACT:42 timelock
+
+# Timelock is fixed at creation; there is no update/disable command
+
+# Anyone with gas can claim after the timelock expires
+wp 0xCONTRACT:42 auto-release
 
 # Fund
 wp 0xCONTRACT:42 +0.05:ETH

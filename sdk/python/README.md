@@ -63,5 +63,6 @@ client.withdraw_fees(table_id=1, amount_wei=5000000000)
 - Table creation has no amount.
 - Only fixed buyer can fund.
 - Buyer controls release or burn.
-- claimTimeout is disabled.
+- Every table has a mandatory immutable timelock set at creation.
+- Anyone can read the timelock and submit the auto-release claim after expiry.
 - There is no refund/proof/arbitration layer.

@@ -10,14 +10,14 @@ class BuyerAgent {
     return this.signer.getAddress();
   }
 
-  async lockFunds({ seller, amount, durationSeconds, agreementHash }) {
-    const tx = await this.escrowContract
+  async lockFunds({ seller, amount, durationSeconds }) {
+    const latest = await this.escrowContract.runner.provider.getBlock("latest");
+    const buyer = await this.signer.getAddress();
+    const releaseTime = BigInt(latest.timestamp + durationSeconds);
+    const createTx = await this.escrowContract
       .connect(this.signer)
-      .createEscrow(seller, durationSeconds, agreementHash, {
-        value: amount,
-        ...ZERO_GAS
-      });
-    const receipt = await tx.wait();
+      .createEscrow(seller, buyer, releaseTime, ZERO_GAS);
+    const receipt = await createTx.wait();
     const event = receipt.logs
       .map((log) => {
         try {
@@ -26,9 +26,11 @@ class BuyerAgent {
           return null;
         }
       })
-      .find((parsed) => parsed && parsed.name === "EscrowCreated");
+      .find((parsed) => parsed && parsed.name === "TableCreated");
 
-    return event.args.escrowId;
+    const tableId = event.args.tableId;
+    await (await this.escrowContract.connect(this.signer).fund(tableId, { value: amount, ...ZERO_GAS })).wait();
+    return tableId;
   }
 
   async release(escrowId) {

@@ -1,37 +1,29 @@
 # Live WP CLI Demo Transactions
 
-These Base mainnet transactions were sent through the public WP CLI flow, using the current preferred contract.
-
-Contract:
+Current preferred Base mainnet contract:
 
 ```text
-0xAa1Ebd8604A209970A5DFa4dF259352D58980120
+0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3
 ```
 
-Demo table:
+Deployment transaction:
 
 ```text
-0xAa1Ebd8604A209970A5DFa4dF259352D58980120:1
+https://basescan.org/tx/0x73a3a915411f8b4105ec4982f05f1223036cb2961d69209b95698c734f0bea8e
 ```
 
-Final verified state:
+Verification:
 
-- state: `Released`
-- funded: `1000000000000` wei
-- balance: `0`
-- withdrawn: `1000000000000` wei
-- protocol fee: `0`
+```text
+https://repo.sourcify.dev/contracts/full_match/8453/0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3/
+```
 
-Transactions:
+No funded live demo table has been created on this redeployment yet. The current CLI was smoke-tested with read-only calls against the new address and transaction safety checks; creating/funding a real demo table requires a hot wallet with Base ETH and an explicit `WP_YES=1` or interactive confirmation.
 
-1. Create table:
-   https://basescan.org/tx/0x870b7eccbb9d074a7ba47c7e118475e2e86904a28cd21f854d3f99d266cb1027
+Required create shape for this deployment:
 
-2. Fund `0.000001 ETH`:
-   https://basescan.org/tx/0xd8dd6da7373db662914fa9f575430f2f1bf386b5853acab64db48b62d1c9f9ba
+```bash
+wp 0xSELLER 0xBUYER --timelock 1h
+```
 
-3. Release:
-   https://basescan.org/tx/0x36796d2c40b97f1ecbc85e5b468f4c6b0fe10552caffe73ff09d6a61ad6217eb
-
-4. Withdraw:
-   https://basescan.org/tx/0x14587a08f2e06a90a44ef29c8f43c939311a6d6d77d64acb94b8e420a9f59d90
+The timelock is mandatory and immutable. There is no update/disable command.

@@ -3,8 +3,8 @@
 Formerly Meridian Protocol.
 
 Network: Base Mainnet
-Contract: `0xAa1Ebd8604A209970A5DFa4dF259352D58980120`
-Explorer: https://basescan.org/address/0xAa1Ebd8604A209970A5DFa4dF259352D58980120
+Contract: `0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3`
+Explorer: https://basescan.org/address/0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3
 Fee: starts at 0% on release, owner-adjustable and capped at 1%
 Dead wallet: `0x000000000000000000000000000000000000dEaD`
 
@@ -20,7 +20,9 @@ A table is a fixed buyer/seller escrow slot. Creation fixes authority. Funding c
 - Buyer can release.
 - Buyer can burn/dispute.
 - Seller withdraws only after release.
-- There is no refund, proof verifier, arbitrator, deadline, or timeout release.
+- Mandatory timelock auto-release is fixed at creation and publicly readable.
+- After the timelock expires, anyone can submit the claim transaction.
+- There is no refund, proof verifier, arbitrator, or hidden keeper.
 
 ## Functions verified from Solidity source
 
@@ -73,13 +75,30 @@ function dispute(uint256 tableId) external
 
 Only the fixed buyer can call while the table is open and funded. Sends table assets to the dead wallet and marks the table Burned. `dispute` is an alias for burn. This is destructive settlement, not refund.
 
-### claimTimeout
+### createTable / createEscrow / getTimeLock
 
 ```solidity
-function claimTimeout(uint256 tableId) external pure
+function createTable(address seller, address buyer, uint64 autoReleaseTime) external returns (uint256 tableId)
+function createEscrow(address seller, address buyer, uint64 autoReleaseTime) external returns (uint256 tableId)
+function getTimeLock(uint256 tableId) external view returns (
+  address creator,
+  uint64 releaseTime,
+  uint256 currentTime,
+  uint256 secondsRemaining,
+  bool enabled
+)
 ```
 
-Always reverts with `TimeoutDisabled`. Timeout release is intentionally removed.
+Every table must be created with a non-zero future `autoReleaseTime`. The timestamp is immutable after creation: there is no `updateTimeLock` function. Anyone can read the current timelock.
+
+### claimTimeLockRelease / claimTimeout
+
+```solidity
+function claimTimeLockRelease(uint256 tableId) external
+function claimTimeout(uint256 tableId) external
+```
+
+Anyone can call after `releaseTime` when the table is open and funded. It uses the same release accounting path as buyer `release`: table becomes Released, seller/fee balances are snapshotted, and seller still withdraws explicitly. `claimTimeout` is kept as a compatibility alias.
 
 ### withdraw
 

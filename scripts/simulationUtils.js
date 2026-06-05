@@ -49,12 +49,14 @@ async function getBalances(addresses) {
   };
 }
 
-async function getPendingWithdrawals(escrow, addresses) {
+async function getPendingWithdrawals(escrow, tableId) {
+  if (!tableId) return { buyer: 0n, seller: 0n, fee: 0n, dead: 0n };
+  const nativeAsset = await escrow.getAssetBalance(tableId, ethers.ZeroAddress);
   return {
-    buyer: await escrow.pendingWithdrawals(addresses.buyer),
-    seller: await escrow.pendingWithdrawals(addresses.seller),
-    fee: await escrow.pendingWithdrawals(addresses.fee),
-    dead: await escrow.pendingWithdrawals(addresses.dead)
+    buyer: 0n,
+    seller: nativeAsset.sellerAmount - nativeAsset.withdrawnAmount,
+    fee: nativeAsset.feeAmount - nativeAsset.feeWithdrawnAmount,
+    dead: nativeAsset.burnedAmount
   };
 }
 
@@ -106,15 +108,18 @@ async function increaseTime(seconds) {
 }
 
 async function printEscrowSnapshot(escrow, escrowId) {
-  const details = await escrow.escrows(escrowId);
+  const table = await escrow.getTable(escrowId);
+  const nativeAsset = await escrow.getAssetBalance(escrowId, ethers.ZeroAddress);
+  const lock = await escrow.getTimeLock(escrowId);
   console.log("\nEscrow Snapshot");
   console.table({
-    escrowId: escrowId.toString(),
-    amount: formatBalance(details.amount),
-    feeAmount: formatBalance(details.feeAmount),
-    sellerAmount: formatBalance(details.sellerAmount),
-    deadline: details.deadline.toString(),
-    status: details.status.toString()
+    tableId: escrowId.toString(),
+    fundedAmount: formatBalance(nativeAsset.fundedAmount),
+    feeAmount: formatBalance(nativeAsset.feeAmount),
+    sellerAmount: formatBalance(nativeAsset.sellerAmount),
+    burnedAmount: formatBalance(nativeAsset.burnedAmount),
+    autoReleaseTime: lock.releaseTime.toString(),
+    status: table.status.toString()
   });
 }
 

@@ -35,6 +35,8 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
         address buyer;
         address releaseFeeWallet;
         EscrowStatus status;
+        address creator;
+        uint64 autoReleaseTime;
     }
 
     uint256 public nextEscrowId;
@@ -47,7 +49,8 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
     mapping(uint256 => mapping(address => AssetBalance)) public assetBalances;
     mapping(address => uint256) public totalAccountedByAsset;
 
-    event TableCreated(uint256 indexed tableId, address indexed seller, address indexed buyer);
+    event TableCreated(uint256 indexed tableId, address indexed seller, address indexed buyer, uint64 autoReleaseTime);
+    event TableAutoReleased(uint256 indexed tableId, address indexed caller, uint64 releaseTime);
     event TableFunded(uint256 indexed tableId, address indexed buyer, address indexed token, uint256 amount, uint256 fundedAmount);
     event TableReleased(uint256 indexed tableId, address indexed buyer, address indexed seller, address feeWallet);
     event AssetReleased(uint256 indexed tableId, address indexed token, uint256 fundedAmount, uint256 sellerAmount, uint256 feeAmount);
@@ -71,7 +74,8 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
     error InsufficientWithdrawable(uint256 availableAmount);
     error InsufficientSurplus(uint256 availableSurplus);
     error FeeTooHigh(uint16 feeBps, uint16 maxFeeBps);
-    error TimeoutDisabled();
+    error InvalidTimeLock();
+    error TimeLockNotReached(uint64 releaseTime, uint256 currentTime);
     error NativeTransferFailed(address recipient, uint256 amount);
 
     constructor(
@@ -89,9 +93,20 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
 
     receive() external payable {}
 
-    function createTable(address seller, address buyer) external returns (uint256 tableId) {
+    function createTable(address seller, address buyer, uint64 autoReleaseTime) external returns (uint256 tableId) {
+        tableId = _createTable(seller, buyer, autoReleaseTime);
+    }
+
+    function createEscrow(address seller, address buyer, uint64 autoReleaseTime) external returns (uint256 tableId) {
+        tableId = _createTable(seller, buyer, autoReleaseTime);
+    }
+
+    function _createTable(address seller, address buyer, uint64 autoReleaseTime) internal returns (uint256 tableId) {
         if (seller == address(0) || buyer == address(0)) {
             revert ZeroAddress();
+        }
+        if (autoReleaseTime == 0 || autoReleaseTime <= block.timestamp) {
+            revert InvalidTimeLock();
         }
 
         tableId = ++nextEscrowId;
@@ -99,14 +114,12 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
             seller: seller,
             buyer: buyer,
             releaseFeeWallet: address(0),
-            status: EscrowStatus.Open
+            status: EscrowStatus.Open,
+            creator: msg.sender,
+            autoReleaseTime: autoReleaseTime
         });
 
-        emit TableCreated(tableId, seller, buyer);
-    }
-
-    function createEscrow(address seller, address buyer) external returns (uint256 tableId) {
-        tableId = this.createTable(seller, buyer);
+        emit TableCreated(tableId, seller, buyer, autoReleaseTime);
     }
 
     function fund(uint256 tableId) external payable nonReentrant {
@@ -136,28 +149,29 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
     function release(uint256 tableId) external nonReentrant {
         Escrow storage escrow = _requireOpenTable(tableId);
         _requireBuyer(escrow);
-        address[] storage assets = tableAssets[tableId];
-        if (assets.length == 0) {
-            revert NoFunds();
+        _release(tableId, escrow);
+    }
+
+    function claimTimeLockRelease(uint256 tableId) external nonReentrant {
+        Escrow storage escrow = _requireOpenTable(tableId);
+        uint64 releaseTime = escrow.autoReleaseTime;
+        if (block.timestamp < releaseTime) {
+            revert TimeLockNotReached(releaseTime, block.timestamp);
         }
 
-        address currentFeeWallet = feeWallet;
-        escrow.status = EscrowStatus.Released;
-        escrow.releaseFeeWallet = currentFeeWallet;
+        _release(tableId, escrow);
+        emit TableAutoReleased(tableId, msg.sender, releaseTime);
+    }
 
-        emit TableReleased(tableId, escrow.buyer, escrow.seller, currentFeeWallet);
-
-        for (uint256 i = 0; i < assets.length; i++) {
-            address token = assets[i];
-            AssetBalance storage asset = assetBalances[tableId][token];
-            if (asset.fundedAmount == 0) {
-                continue;
-            }
-            (uint256 feeAmount, uint256 sellerAmount) = quoteFee(asset.fundedAmount);
-            asset.feeAmount = feeAmount;
-            asset.sellerAmount = sellerAmount;
-            emit AssetReleased(tableId, token, asset.fundedAmount, sellerAmount, feeAmount);
+    function claimTimeout(uint256 tableId) external nonReentrant {
+        Escrow storage escrow = _requireOpenTable(tableId);
+        uint64 releaseTime = escrow.autoReleaseTime;
+        if (block.timestamp < releaseTime) {
+            revert TimeLockNotReached(releaseTime, block.timestamp);
         }
+
+        _release(tableId, escrow);
+        emit TableAutoReleased(tableId, msg.sender, releaseTime);
     }
 
     function burn(uint256 tableId) external nonReentrant {
@@ -166,10 +180,6 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
 
     function dispute(uint256 tableId) external nonReentrant {
         _burn(tableId);
-    }
-
-    function claimTimeout(uint256) external pure {
-        revert TimeoutDisabled();
     }
 
     function withdraw(uint256 tableId, address token, uint256 amount) external nonReentrant {
@@ -317,6 +327,27 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
         return tableAssets[tableId];
     }
 
+    function getTimeLock(
+        uint256 tableId
+    )
+        external
+        view
+        returns (
+            address creator,
+            uint64 releaseTime,
+            uint256 currentTime,
+            uint256 secondsRemaining,
+            bool enabled
+        )
+    {
+        Escrow storage escrow = escrows[tableId];
+        creator = escrow.creator;
+        releaseTime = escrow.autoReleaseTime;
+        currentTime = block.timestamp;
+        enabled = releaseTime != 0;
+        secondsRemaining = enabled && releaseTime > block.timestamp ? releaseTime - block.timestamp : 0;
+    }
+
     function getAssetBalance(
         uint256 tableId,
         address token
@@ -360,6 +391,31 @@ contract AIAgentEscrow is Ownable, ReentrancyGuard {
         totalAccountedByAsset[token] += amount;
 
         emit TableFunded(tableId, msg.sender, token, amount, asset.fundedAmount);
+    }
+
+    function _release(uint256 tableId, Escrow storage escrow) internal {
+        address[] storage assets = tableAssets[tableId];
+        if (assets.length == 0) {
+            revert NoFunds();
+        }
+
+        address currentFeeWallet = feeWallet;
+        escrow.status = EscrowStatus.Released;
+        escrow.releaseFeeWallet = currentFeeWallet;
+
+        emit TableReleased(tableId, escrow.buyer, escrow.seller, currentFeeWallet);
+
+        for (uint256 i = 0; i < assets.length; i++) {
+            address token = assets[i];
+            AssetBalance storage asset = assetBalances[tableId][token];
+            if (asset.fundedAmount == 0) {
+                continue;
+            }
+            (uint256 feeAmount, uint256 sellerAmount) = quoteFee(asset.fundedAmount);
+            asset.feeAmount = feeAmount;
+            asset.sellerAmount = sellerAmount;
+            emit AssetReleased(tableId, token, asset.fundedAmount, sellerAmount, feeAmount);
+        }
     }
 
     function _burn(uint256 tableId) internal {

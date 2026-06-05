@@ -1,3 +1,4 @@
+const { ethers } = require("hardhat");
 const {
   AGREEMENT_HASH,
   DEFAULT_AMOUNT,
@@ -33,12 +34,11 @@ async function main() {
   printBalanceTable("Saldo Setelah Release (belum withdraw)", await getBalances(addresses));
   printPendingWithdrawalsTable(
     "Pending Withdrawals Setelah Release",
-    await getPendingWithdrawals(escrow, addresses)
+    await getPendingWithdrawals(escrow, escrowId)
   );
 
   console.log("\nAgent B dan Wallet Fee memanggil withdraw().");
-  await (await escrow.connect(feeSigner).withdraw(ZERO_GAS)).wait();
-  await (await escrow.connect(sellerSigner).withdraw(ZERO_GAS)).wait();
+  await (await escrow.connect(sellerSigner).withdraw(escrowId, ethers.ZeroAddress, DEFAULT_AMOUNT, ZERO_GAS)).wait();
 
   const after = await getBalances(addresses);
   printBalanceTable("Saldo Akhir", after);

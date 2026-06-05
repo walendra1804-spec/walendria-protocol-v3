@@ -7,7 +7,7 @@ const path = require('path');
 const os = require('os');
 
 const DEFAULT_RPC = process.env.WP_RPC_URL || 'https://mainnet.base.org';
-const DEFAULT_CONTRACT = process.env.WP_CONTRACT_ADDRESS || '0xAa1Ebd8604A209970A5DFa4dF259352D58980120';
+const DEFAULT_CONTRACT = process.env.WP_CONTRACT_ADDRESS || '0xACA2c8EB39A0999C6e6AEAB72F65623266007eB3';
 const CHAIN_ID = Number(process.env.WP_CHAIN_ID || 8453);
 const NATIVE = 'ETH';
 const TOKEN_ALIASES = {
@@ -19,21 +19,24 @@ const TOKEN_ALIASES = {
 };
 
 const WP_ABI = [
-  'event TableCreated(uint256 indexed tableId,address indexed seller,address indexed buyer)',
-  'function createTable(address seller,address buyer) returns (uint256)',
-  'function createEscrow(address seller,address buyer) returns (uint256)',
+  'event TableCreated(uint256 indexed tableId,address indexed seller,address indexed buyer,uint64 autoReleaseTime)',
+  'function createTable(address seller,address buyer,uint64 autoReleaseTime) returns (uint256)',
+  'function createEscrow(address seller,address buyer,uint64 autoReleaseTime) returns (uint256)',
   'function getTable(uint256 id) view returns (address seller,address buyer,uint256 fundedAmount,uint256 balance,uint256 withdrawnAmount,uint8 state)',
   'function getTableAssets(uint256 id) view returns (address[])',
+  'function getTimeLock(uint256 id) view returns (address creator,uint64 releaseTime,uint256 currentTime,uint256 secondsRemaining,bool enabled)',
   'function getAssetBalance(uint256 id,address asset) view returns (uint256 fundedAmount,uint256 balance,uint256 sellerAmount,uint256 feeAmount,uint256 withdrawnAmount,uint256 feeWithdrawnAmount,uint256 burnedAmount)',
   'function getHistoryLength(uint256 id) view returns (uint256)',
   'function getHistoryEntry(uint256 id,uint256 index) view returns (tuple(uint8 action,address actor,address token,uint256 amount,uint256 timestamp,uint256 blockNumber))',
   'function fund(uint256 id) payable',
   'function fundToken(uint256 id,address token,uint256 amount)',
   'function release(uint256 id)',
+  'function claimTimeLockRelease(uint256 id)',
+  'function claimTimeout(uint256 id)',
   'function burn(uint256 id)',
   'function dispute(uint256 id)',
   'function withdraw(uint256 id,address token,uint256 amount)',
-  'function quoteFee(uint256 amount) view returns (uint256 sellerAmount,uint256 feeAmount)',
+  'function quoteFee(uint256 amount) view returns (uint256 feeAmount,uint256 sellerAmount)',
   'function NATIVE_TOKEN() view returns (address)',
   'function feeWallet() view returns (address)',
   'function deadWallet() view returns (address)'
@@ -69,11 +72,16 @@ Commands:
   # Optional for AI agents / scripts: skip interactive YES prompts.
   export WP_YES=1
 
-  # Create table on default/live WP contract.
-  wp 0xSELLER 0xBUYER
+  # Create table on default/live WP contract. Timelock is mandatory.
+  wp 0xSELLER 0xBUYER --timelock 1h
+  wp 0xSELLER 0xBUYER --timelock unix:1780000000
 
-  # Read table state on-chain. No private key needed.
+  # Read table state and timelock on-chain. No private key needed.
   wp 0xCONTRACT:42
+  wp 0xCONTRACT:42 timelock
+
+  # Anyone can trigger auto-release after the configured time is reached.
+  wp 0xCONTRACT:42 auto-release
 
   # Fund with native ETH from buyer/controller key.
   wp 0xCONTRACT:42 +0.05:ETH
@@ -127,8 +135,39 @@ const HISTORY_ACTIONS = ['None', 'Created', 'Funded', 'Released', 'Burned', 'Sel
 
 function formatUnix(ts) {
   const n = Number(ts || 0n);
-  if (!n) return '0';
+  if (!n) return 'disabled';
   return new Date(n * 1000).toISOString();
+}
+
+function parseReleaseTime(raw) {
+  if (raw === undefined || raw === null || raw === '') return 0n;
+  const s = String(raw).trim().toLowerCase();
+  if (s === '0' || s === 'off' || s === 'disable' || s === 'disabled' || s === 'none') return 0n;
+  if (s.startsWith('unix:')) {
+    const n = BigInt(s.slice(5));
+    if (n < 0n) die('Bad unix timestamp.');
+    return n;
+  }
+  const m = /^(\d+)(s|m|h|d|w)?$/.exec(s);
+  if (!m) die('Bad timelock. Use 30m, 1h, 7d, or unix:1780000000.');
+  const value = BigInt(m[1]);
+  const unit = m[2] || 's';
+  const mul = { s: 1n, m: 60n, h: 3600n, d: 86400n, w: 604800n }[unit];
+  if (value === 0n) return 0n;
+  return BigInt(Math.floor(Date.now() / 1000)) + value * mul;
+}
+
+function formatRemaining(seconds) {
+  const n = BigInt(seconds || 0n);
+  if (n === 0n) return '0s';
+  const parts = [];
+  let rem = n;
+  for (const [label, size] of [['d', 86400n], ['h', 3600n], ['m', 60n]]) {
+    const q = rem / size;
+    if (q) { parts.push(`${q}${label}`); rem %= size; }
+  }
+  if (rem || !parts.length) parts.push(`${rem}s`);
+  return parts.join(' ');
 }
 
 async function tokenLabel(ethers, provider, asset) {
@@ -151,6 +190,42 @@ async function main() {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') { usage(); return; }
   const ethers = ensureEthers();
   const provider = new ethers.JsonRpcProvider(DEFAULT_RPC, CHAIN_ID);
+
+  if (args.length === 2 && isTable(args[0]) && args[1] === 'timelock') {
+    const { contract, id } = splitTable(args[0]);
+    const wp = new ethers.Contract(contract, WP_ABI, provider);
+    let lock;
+    try {
+      lock = await wp.getTimeLock(id);
+    } catch (err) {
+      die(`This contract does not expose WP timelock reads. Use a timelock-enabled WP contract. (${err.shortMessage || err.message})`);
+    }
+    console.log('WP table timelock (on-chain)');
+    console.log(`chain_id: ${CHAIN_ID}`);
+    console.log(`contract: ${contract}`);
+    console.log(`table_id: ${id.toString()}`);
+    console.log(`creator: ${lock.creator}`);
+    console.log(`enabled: ${lock.enabled}`);
+    console.log(`release_time: ${lock.releaseTime} (${formatUnix(lock.releaseTime)})`);
+    console.log(`current_time: ${lock.currentTime} (${formatUnix(lock.currentTime)})`);
+    console.log(`seconds_remaining: ${lock.secondsRemaining} (${formatRemaining(lock.secondsRemaining)})`);
+    return;
+  }
+
+  if (args.length === 2 && isTable(args[0]) && (args[1] === 'auto-release' || args[1] === 'claim-timeout')) {
+    const { contract, id } = splitTable(args[0]);
+    const key = process.env.WP_PRIVATE_KEY;
+    if (!isPrivateKey(key)) die('Auto-release claim sends a transaction and needs WP_PRIVATE_KEY for gas. Any wallet can call it after the timelock expires.');
+    const wallet = new ethers.Wallet(key, provider);
+    const wp = new ethers.Contract(contract, WP_ABI, wallet);
+    await confirmTx('claimTimeLockRelease', { contract, table_id: id.toString(), signer: wallet.address });
+    const tx = await wp.claimTimeLockRelease(id);
+    console.log(`tx: ${tx.hash}`);
+    const rc = await tx.wait();
+    console.log(`confirmed_block: ${rc.blockNumber}`);
+    console.log(`status: ${rc.status === 1 ? 'success' : 'failed'}`);
+    return;
+  }
 
   if (args.length === 2 && isTable(args[0]) && args[1] === 'history') {
     const { contract, id } = splitTable(args[0]);
@@ -220,13 +295,22 @@ async function main() {
     return;
   }
 
-  if ((args.length === 2 || args.length === 3) && isAddress(args[0]) && isAddress(args[1])) {
-    const key = args.length === 3 ? args[2] : process.env.WP_PRIVATE_KEY;
+  if (args.length >= 2 && isAddress(args[0]) && isAddress(args[1])) {
+    const timelockIndex = args.indexOf('--timelock');
+    if (timelockIndex === -1 || timelockIndex + 1 >= args.length) {
+      die('Creating a WP table requires a timelock. Use: wp 0xSELLER 0xBUYER --timelock 1h');
+    }
+    const releaseTime = parseReleaseTime(args[timelockIndex + 1]);
+    if (releaseTime === 0n) die('Timelock cannot be 0. Use a future value like --timelock 1h or --timelock unix:1780000000.');
+    let key = process.env.WP_PRIVATE_KEY;
+    const leftovers = args.slice(2, timelockIndex).concat(args.slice(timelockIndex + 2));
+    if (leftovers.length === 1) key = leftovers[0];
+    if (leftovers.length > 1) die('Bad create command. Use: wp 0xSELLER 0xBUYER [0xPRIVATE_KEY] --timelock 1h');
     if (!isPrivateKey(key)) die('Creating a live table needs a 0x-prefixed 64-hex private key, or set WP_PRIVATE_KEY and omit the key argument.');
     const wallet = new ethers.Wallet(key, provider);
     const wp = new ethers.Contract(DEFAULT_CONTRACT, WP_ABI, wallet);
-    await confirmTx('createTable', { contract: DEFAULT_CONTRACT, signer: wallet.address, seller: args[0], buyer: args[1] });
-    const tx = await wp.createTable(args[0], args[1]);
+    await confirmTx('createTable', { contract: DEFAULT_CONTRACT, signer: wallet.address, seller: args[0], buyer: args[1], release_time: `${releaseTime} (${formatUnix(releaseTime)})` });
+    const tx = await wp.createTable(args[0], args[1], releaseTime);
     console.log(`tx: ${tx.hash}`);
     const rc = await tx.wait();
     console.log(`confirmed_block: ${rc.blockNumber}`);
@@ -237,6 +321,7 @@ async function main() {
         if (parsed && parsed.name === 'TableCreated') {
           console.log(`table_id: ${parsed.args.tableId}`);
           console.log(`table: ${DEFAULT_CONTRACT}:${parsed.args.tableId}`);
+          console.log(`release_time: ${parsed.args.autoReleaseTime} (${formatUnix(parsed.args.autoReleaseTime)})`);
         }
       } catch (_) {}
     }
