@@ -15,6 +15,13 @@ The protocol uses a deliberately hard settlement rule:
 
 This is a base protocol, not a consumer arbitration product. It does not verify proof, judge work, refund buyers, or resolve disputes. It only enforces the release-or-burn table rules committed on-chain.
 
+## Whitepaper
+
+The project includes two whitepaper versions under `docs/whitepaper/`:
+
+- `WALENDRIA_PROTOCOL_ORIGINAL.pdf` — original raw Indonesian draft by Panca Walendra Putra.
+- `WALENDRIA_PROTOCOL_ENGLISH.pdf` — refined English version for public readers and protocol review.
+
 ## Mainnet Deployment
 
 Network: Base Mainnet
