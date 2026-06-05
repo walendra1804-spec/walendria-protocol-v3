@@ -145,6 +145,16 @@ wp 0xCONTRACT:42 -0.05:ETH
 
 No funded live demo table has been created on the current redeployment yet. See `docs/LIVE_CLI_DEMO.md` for the deployment and verification links.
 
+## Pure Protocol Usage
+
+For people who want to try the protocol directly on Base Sepolia without the Walendria app, CLI, SDK, backend, or a human mediator, read:
+
+```text
+docs/PURE_PROTOCOL_USAGE.md
+```
+
+It shows the exact on-chain table flow: create table, fund, release, burn, timelock release, withdraw, and raw read verification.
+
 ## Quick Start
 
 Install and test locally:
